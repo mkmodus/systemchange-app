@@ -8,7 +8,7 @@ import { createPcmBlob, getAudioStream, PCM_SAMPLE_RATE } from './utils/audioUti
 import { TranscriptionList } from './components/TranscriptionList';
 import { downloadCsv } from './utils/csvUtils';
 
-const API_KEY = process.env.SYSTEMCHANGE_APP_API_KEY || '';
+const API_KEY = process.env.API_KEY || '';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
