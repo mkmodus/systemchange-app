@@ -1,0 +1,7 @@
+{
+  "name": "2026 체제전환운동포럼 문자통역",
+  "description": "Real-time voice-to-text transcription application using Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
