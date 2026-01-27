@@ -1,13 +1,12 @@
-export interface TranscriptionSegment {
+
+export interface TextBlock {
   id: string;
-  text: string;
-  timestamp: Date;
-  isFinal: boolean;
+  original: string;
+  refined: string;
+  timestamp: number;
 }
 
-export enum ConnectionStatus {
-  DISCONNECTED = 'disconnected',
-  CONNECTING = 'connecting',
-  CONNECTED = 'connected',
-  ERROR = 'error',
+export enum StorageKeys {
+  BLOCKS = 'interpretation_blocks',
+  IS_RECORDING = 'is_recording_active'
 }

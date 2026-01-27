@@ -1,6 +1,6 @@
 {
-  "name": "2026 체제전환운동포럼 문자통역",
-  "description": "Real-time voice-to-text transcription application using Gemini Live API.",
+  "name": "Live Text Interpreter for the Hearing Impaired",
+  "description": "A specialized communication app that provides buffered, contextually-refined text interpretation for hearing impaired users using Gemini AI for high accuracy.",
   "requestFramePermissions": [
     "microphone"
   ]

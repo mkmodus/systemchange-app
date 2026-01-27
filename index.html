@@ -1,57 +1,50 @@
+
 <!DOCTYPE html>
 <html lang="ko">
-  <head>
-    <meta charset="UTF-8" />
-    <title>2026 체제전환운동포럼 문자통역</title>
-    <meta name="description" content="되돌아가지 않고, 새롭게! 2026 체제전환운동포럼 문자통역">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://systemchange-app.vercel.app/">
-    <meta property="og:title" content="2026 체제전환운동포럼 문자통역">
-    <meta property="og:description" content="되돌아가지 않고, 새롭게! 2026 체제전환운동포럼 문자통역">
-    <meta property="og:image" content="https://raw.githubusercontent.com/mkmodus/systemchange-app/refs/heads/main/og-image.png">
-    <meta property="og:image:width" content="1280">
-    <meta property="og:image:height" content="720">
-    <meta property="og:site_name" content="되돌아가지 않고, 새롭게! 2026 체제전환운동포럼 문자통역">
-    <meta property="og:locale" content="ko_KR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Text Interpreter</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      html, body {
-        height: 100%;
+      @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;700&display=swap');
+      body {
+        font-family: 'Pretendard', sans-serif;
+        background-color: black;
+        color: white;
         margin: 0;
-        padding: 0;
-        font-family: 'Inter', sans-serif;
-        background-color: #040A1D; /* Custom Dark Blue */
-        color: #e2e8f0; /* Slate 200 */
-        overflow: hidden; /* App handles scrolling */
+        overflow-x: hidden;
       }
-      #root {
-        height: 100%;
+      /* Custom scrollbar for dark theme */
+      ::-webkit-scrollbar {
+        width: 8px;
       }
-      /* Custom scrollbar for transcript */
-      .scrollbar-hide::-webkit-scrollbar {
-          display: none;
+      ::-webkit-scrollbar-track {
+        background: #1a1a1a;
       }
-      .scrollbar-hide {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
+      ::-webkit-scrollbar-thumb {
+        background: #333;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #444;
       }
     </style>
-  <script type="importmap">
+<script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
-    "@google/genai": "https://esm.sh/@google/genai@^1.34.0"
+    "react-router-dom": "https://esm.sh/react-router-dom@^7.13.0",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react": "https://esm.sh/react@^19.2.4",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/"
   }
 }
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
-  <body>
+<body class="bg-black text-white">
     <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
