@@ -64,8 +64,8 @@ const AdminPage: React.FC = () => {
     if (pendingText.trim() && !isProcessingRef.current) {
       if (timerRef.current) clearInterval(timerRef.current);
       
-      let timeLeft = 100;
-      setCountdown(100);
+      let timeLeft = 70;
+      setCountdown(70);
       
       timerRef.current = setInterval(() => {
         timeLeft -= 1.25; 
