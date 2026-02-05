@@ -26,7 +26,7 @@ const AdminPage: React.FC = () => {
   };
 
   const processPendingText = useCallback(async () => {
-    // 텍스트가 2자 미만이면 무시 (불필요한 API 호출 방지)
+    // 2자 미만은 무시하여 불필요한 API 호출 차단
     if (isProcessingRef.current || pendingText.trim().length < 2) return;
 
     const textToProcess = pendingText.trim();
@@ -34,9 +34,10 @@ const AdminPage: React.FC = () => {
     setPendingText(''); 
     
     isProcessingRef.current = true;
-    setStatusMessage('⚡ NEXT');
+    setStatusMessage('⚡ AI'); // 상태 메시지도 짧게 변경하여 렌더링 최적화
 
     try {
+      // 🚀 Gemini 1.5 Flash 모델 사용 시 이 부분에서 약 0.5~1초 내외로 결과가 나옵니다.
       const refined = await refineTranscription(textToProcess);
       const newBlock: TextBlock = {
         id: Math.random().toString(36).substring(7),
@@ -61,22 +62,20 @@ const AdminPage: React.FC = () => {
     }
   }, [pendingText, isRecording]);
 
-  // 🚀 극단적 단문 트리거: 8자 도달 시 또는 0.1초 침묵 시 전송
+  // ⚡ 초단문 트리거 (8자 이상 시 즉시 전송)
   useEffect(() => {
     const trimmed = pendingText.trim();
     if (trimmed && !isProcessingRef.current) {
-      // 단어 한두 개(8자)만 되어도 바로 전송
       if (trimmed.length > 8) { 
         processPendingText(); 
         return; 
       }
 
-      if (timerRef.current) clearInterval(timerRef.current);
-      
-      // 침묵 대기 시간 0.1초 (기다림 없음)
+      if (timerRef.current) clearTimeout(timerRef.current);
+      // 침묵 대기 시간 0.2초 (거의 즉시)
       timerRef.current = setTimeout(() => {
         processPendingText();
-      }, 100);
+      }, 200);
     }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [pendingText, processPendingText]);
@@ -99,7 +98,7 @@ const AdminPage: React.FC = () => {
       
       if (currentFinal) {
         setPendingText(prev => prev + (prev ? ' ' : '') + currentFinal);
-        // 확정 데이터가 오면 0.01초의 지체 없이 즉시 처리 함수 호출
+        // 확정 데이터가 들어오면 대기시간 없이 즉시 처리
         processPendingText(); 
       }
     };
@@ -115,47 +114,38 @@ const AdminPage: React.FC = () => {
 
   return (
     <div className="p-4 bg-black min-h-screen text-white font-sans overflow-hidden">
-      {/* 초슬림 헤더 */}
       <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4">
         <div className="flex items-center gap-3">
           <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-800'}`} />
           <span className="text-[10px] font-black tracking-widest">{statusMessage}</span>
         </div>
-        <div className="flex gap-4">
-          {!isRecording ? (
-            <button onClick={startRecording} className="text-[10px] font-black bg-white text-black px-4 py-1 rounded-full">REC</button>
-          ) : (
-            <button onClick={stopRecording} className="text-[10px] font-black bg-red-600 px-4 py-1 rounded-full">STOP</button>
-          )}
-        </div>
+        {!isRecording ? (
+          <button onClick={startRecording} className="text-[10px] font-black bg-white text-black px-4 py-1 rounded-full">START REC</button>
+        ) : (
+          <button onClick={stopRecording} className="text-[10px] font-black bg-red-600 px-4 py-1 rounded-full">STOP</button>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[calc(100vh-100px)]">
-        {/* Input 영역: 글자를 크게 하여 시인성 확보 */}
-        <div className="flex flex-col relative group">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-[0.3em] uppercase">Raw Input</span>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[calc(100vh-120px)]">
+        <div className="flex flex-col relative">
           <textarea
             value={pendingText}
             onChange={(e) => setPendingText(e.target.value)}
-            className="flex-grow bg-transparent text-5xl font-black leading-tight resize-none outline-none placeholder-zinc-900 transition-all focus:text-blue-500"
+            className="flex-grow bg-transparent text-5xl font-black leading-tight resize-none outline-none placeholder-zinc-900"
             placeholder="..."
-            autoFocus
           />
           {processingSnapshot && (
-            <div className="absolute bottom-0 left-0 right-0 p-4 bg-zinc-900/50 rounded-2xl border border-white/5 animate-pulse">
-              <p className="text-[9px] text-zinc-500 font-bold mb-1">AI PROCESSING</p>
-              <p className="text-xl font-bold text-white/50">{processingSnapshot}</p>
+            <div className="text-blue-500 text-xs font-bold animate-pulse">
+              SYNCING: {processingSnapshot}
             </div>
           )}
         </div>
 
-        {/* Output 영역: 최신 글자가 가장 크게 */}
         <div className="flex flex-col overflow-hidden">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-[0.3em] uppercase">Refined Presentation</span>
-          <div className="flex-grow overflow-y-auto space-y-8 scrollbar-hide">
+          <div className="flex-grow overflow-y-auto space-y-6 scrollbar-hide">
             {blocks.map((block, i) => (
-              <div key={block.id} className={`transition-all duration-500 ${i === 0 ? 'opacity-100' : 'opacity-10 blur-[1px]'}`}>
-                <p className={`${i === 0 ? 'text-4xl md:text-5xl' : 'text-xl'} font-bold leading-tight`}>
+              <div key={block.id} className={`transition-all duration-300 ${i === 0 ? 'opacity-100' : 'opacity-10'}`}>
+                <p className={`${i === 0 ? 'text-4xl' : 'text-xl'} font-bold leading-tight`}>
                   {block.refined}
                 </p>
               </div>
