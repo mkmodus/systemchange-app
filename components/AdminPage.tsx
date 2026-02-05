@@ -26,14 +26,25 @@ const AdminPage: React.FC = () => {
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
   };
 
-  // ⚡ 보정 및 전송 함수
+  // 🔄 엔진 완전 리셋 (잔상 제거 핵심)
+  const resetEngine = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.stop();
+    }
+    setTimeout(() => {
+      if (isRecording) startRecording();
+    }, 50); // 아주 짧은 찰나에 재시작
+  }, [isRecording]);
+
+  // ⚡ 보정 프로세스
   const processBuffer = useCallback(async (forcedText?: string) => {
     const textToSend = (forcedText || finalizedBufferRef.current).trim();
-    if (isProcessingRef.current || textToSend.length < 1) return;
+    if (isProcessingRef.current || textToSend.length < 2) return;
 
     isProcessingRef.current = true;
     
-    // [중요] 전송 시작 즉시 React 상태와 내부 Ref 모두 초기화
+    // [즉시 초기화] 전송 시작과 동시에 화면과 버퍼를 비움
     finalizedBufferRef.current = ''; 
     setDisplayInterim(''); 
     setStatusMessage('⚡ AI SYNC');
@@ -52,9 +63,6 @@ const AdminPage: React.FC = () => {
         syncData(updated);
         return updated;
       });
-    } catch (e) {
-      const fallback = { id: `err-${Date.now()}`, original: textToSend, refined: textToSend, timestamp: Date.now() };
-      setBlocks(prev => { const up = [fallback, ...prev]; syncData(up); return up; });
     } finally {
       isProcessingRef.current = false;
       setStatusMessage('LIVE');
@@ -62,52 +70,21 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
-  // 🔄 엔진 초기화 함수 (잔상 제거의 핵심)
-  const resetRecognitionEngine = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null; // 자동 재시작 방지
-      recognitionRef.current.stop();
-    }
-    // 엔진이 멈춘 뒤 0.1초 후 새 세션 시작 (엔진 내부 버퍼를 완전히 비움)
-    setTimeout(() => {
-      if (isRecording) startRecording();
-    }, 100);
-  }, [isRecording]);
-
-  // 🔴 수동 조작: 즉시 전송 버튼 클릭 시
-  const handleManualSend = () => {
-    const currentText = displayInterim.trim();
-    if (currentText) {
-      processBuffer(currentText); // 1. 텍스트 처리 시작
-      resetRecognitionEngine();  // 2. 엔진을 리셋하여 브라우저 메모리 비움
-    }
+  // 🔴 수동/자동 전송 시 엔진 리셋 병행
+  const handleSend = (text?: string) => {
+    processBuffer(text);
+    resetEngine();
   };
 
-  // 🕒 자동 전송 타이머 (0.4초 침묵 시)
+  // 타이머: 0.5초 침묵 시 자동 전송 (정확도를 위해 대기시간 소폭 상향)
   useEffect(() => {
     const currentText = finalizedBufferRef.current.trim();
     if (currentText && !isProcessingRef.current) {
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        processBuffer();
-        resetRecognitionEngine(); // 자동 전송 시에도 엔진 리셋으로 잔상 방지
-      }, 400);
+      timerRef.current = setTimeout(() => handleSend(), 500);
     }
     return () => clearTimeout(timerRef.current);
-  }, [displayInterim, processBuffer, resetRecognitionEngine]);
-
-  // 🚨 좀비 감시 워치독
-  useEffect(() => {
-    let watchdog: any;
-    if (isRecording) {
-      watchdog = setInterval(() => {
-        if (Date.now() - lastResultTimeRef.current > 3000 && !isProcessingRef.current) {
-          resetRecognitionEngine();
-        }
-      }, 1000);
-    }
-    return () => clearInterval(watchdog);
-  }, [isRecording, resetRecognitionEngine]);
+  }, [displayInterim]);
 
   const startRecording = () => {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
@@ -126,22 +103,19 @@ const AdminPage: React.FC = () => {
 
     recognition.onresult = (event: any) => {
       lastResultTimeRef.current = Date.now();
-      let interimContent = '';
-      
+      let interim = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalizedBufferRef.current += (finalizedBufferRef.current ? ' ' : '') + transcript;
+          finalizedBufferRef.current += (finalizedBufferRef.current ? ' ' : '') + event.results[i][0].transcript;
         } else {
-          interimContent += transcript;
+          interim += event.results[i][0].transcript;
         }
       }
-      setDisplayInterim(finalizedBufferRef.current + interimContent);
+      setDisplayInterim(finalizedBufferRef.current + interim);
 
-      // 25자 도달 시 자동 전송 시도
-      if (finalizedBufferRef.current.length > 25) {
-        processBuffer();
-        resetRecognitionEngine();
+      // 🚀 정확도를 위한 적정 임계치: 30자
+      if (finalizedBufferRef.current.length > 30) {
+        handleSend();
       }
     };
 
@@ -152,7 +126,6 @@ const AdminPage: React.FC = () => {
 
   const stopRecording = () => {
     setIsRecording(false);
-    setStatusMessage('READY');
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       recognitionRef.current.stop();
@@ -172,18 +145,16 @@ const AdminPage: React.FC = () => {
           ) : (
             <button onClick={stopRecording} className="text-[10px] font-black text-red-500">STOP</button>
           )}
-          <button onClick={() => { if(confirm("초기화?")) syncData([]); setBlocks([]); }} className="text-[10px] font-black opacity-20 hover:opacity-100">CLEAR</button>
+          <button onClick={() => { if(confirm("초기화?")) syncData([]); setBlocks([]); }} className="text-[10px] font-black opacity-20">CLEAR</button>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-120px)]">
         <div className="flex flex-col relative overflow-hidden group">
           <div className="flex justify-between items-center mb-4">
-             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Input (Engine: {isRecording ? 'ON' : 'OFF'})</span>
+             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Input</span>
              {displayInterim.trim() && (
-               <button onClick={handleManualSend} className="bg-blue-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full shadow-lg shadow-blue-900/40">
-                 즉시 전송
-               </button>
+               <button onClick={() => handleSend(displayInterim)} className="bg-blue-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full">즉시 전송</button>
              )}
           </div>
           <div className="text-3xl md:text-5xl font-black leading-tight text-white/90 break-keep">
