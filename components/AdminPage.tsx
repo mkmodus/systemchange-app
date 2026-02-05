@@ -6,7 +6,7 @@ import { db, ref, set } from '../services/firebase';
 const AdminPage: React.FC = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [statusMessage, setStatusMessage] = useState('READY');
-  const [displayInterim, setDisplayInterim] = useState(''); // 이제 직접 편집 가능
+  const [displayInterim, setDisplayInterim] = useState('');
   const [blocks, setBlocks] = useState<TextBlock[]>([]);
   
   const recognitionRef = useRef<any>(null);
@@ -21,24 +21,31 @@ const AdminPage: React.FC = () => {
     return () => stopRecording();
   }, []);
 
-  const syncData = (newBlocks: TextBlock[]) => {
-    set(ref(db, 'interpretation/blocks'), newBlocks);
-    localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
+  // Firebase 및 로컬 스토리지 동기화 (공통 함수)
+  const syncData = useCallback((updatedBlocks: TextBlock[]) => {
+    set(ref(db, 'interpretation/blocks'), updatedBlocks);
+    localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(updatedBlocks));
+  }, []);
+
+  // ⚡ 송출된 블록 내용 수정 함수
+  const handleEditBlock = (id: string, newRefined: string) => {
+    setBlocks(prev => {
+      const updated = prev.map(block => 
+        block.id === id ? { ...block, refined: newRefined } : block
+      );
+      syncData(updated); // 수정 즉시 Firebase에 반영 (참가자 화면 변경)
+      return updated;
+    });
   };
 
-  // ⚡ 보정 프로세스
-  const processBuffer = useCallback(async (manualText?: string) => {
-    // 수동 편집 내용이 있으면 우선순위로 사용, 없으면 버퍼에서 추출
-    const textToSend = (manualText || fullContentRef.current.substring(offsetRef.current)).trim();
-    
-    if (isProcessingRef.current || textToSend.length < 1) return;
+  const processBuffer = useCallback(async () => {
+    const textToSend = fullContentRef.current.substring(offsetRef.current).trim();
+    if (isProcessingRef.current || textToSend.length < 2) return;
 
     isProcessingRef.current = true;
-    
-    // 즉시 상태 초기화 (잔상 방지)
-    offsetRef.current = fullContentRef.current.length; 
+    offsetRef.current = fullContentRef.current.length;
     setDisplayInterim(''); 
-    setStatusMessage('⚡ AI REFINING');
+    setStatusMessage('⚡ AI SYNC');
 
     try {
       const refined = await refineTranscription(textToSend);
@@ -58,22 +65,11 @@ const AdminPage: React.FC = () => {
       isProcessingRef.current = false;
       setStatusMessage('LIVE');
     }
-  }, []);
+  }, [syncData]);
 
-  // 수동 입력 핸들러: 관리자가 직접 타이핑할 때 호출
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setDisplayInterim(val);
-    
-    // [중요] 관리자가 수동으로 고친 내용을 버퍼에 반영
-    // 이렇게 하면 자동 전송 타이머가 돌 때 수동으로 고친 내용이 나갑니다.
-    const baseText = fullContentRef.current.substring(0, offsetRef.current);
-    fullContentRef.current = baseText + val;
-  };
-
-  // 자동 전송 타이머 (0.8초 침묵 시)
   useEffect(() => {
-    if (displayInterim.trim() && !isProcessingRef.current) {
+    const currentUnsent = fullContentRef.current.substring(offsetRef.current).trim();
+    if (currentUnsent && !isProcessingRef.current) {
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(processBuffer, 800);
     }
@@ -82,7 +78,6 @@ const AdminPage: React.FC = () => {
 
   const startRecording = async () => {
     try {
-      setStatusMessage('MIC CHECK...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach(track => track.stop());
 
@@ -107,37 +102,29 @@ const AdminPage: React.FC = () => {
       };
 
       recognition.onresult = (event: any) => {
-        // 관리자가 편집 중(커서 포커스)일 때는 자동 업데이트를 최소화하고 싶다면 
-        // 추가 로직이 필요하지만, 여기서는 최신 음성을 계속 덧붙이는 방식을 유지합니다.
         let interim = '';
         let finalized = '';
         for (let i = 0; i < event.results.length; ++i) {
           if (event.results[i].isFinal) finalized += event.results[i][0].transcript;
           else if (i >= event.resultIndex) interim += event.results[i][0].transcript;
         }
-
         fullContentRef.current = finalized;
-        const currentUnsent = finalized.substring(offsetRef.current) + interim;
-        setDisplayInterim(currentUnsent);
-
-        if (finalized.substring(offsetRef.current).length > 40) {
-          processBuffer();
-        }
+        setDisplayInterim(finalized.substring(offsetRef.current) + interim);
+        if (finalized.substring(offsetRef.current).length > 40) processBuffer();
       };
 
-      recognition.onerror = () => setIsRecording(false);
-      recognition.onend = () => { if (isRecording) try { recognition.start(); } catch(e) {} };
-
+      recognition.onend = () => { if (isRecording) recognition.start(); };
       recognition.start();
       recognitionRef.current = recognition;
     } catch (err) {
-      setStatusMessage('MIC ERROR');
+      setStatusMessage('MIC BLOCKED');
       setIsRecording(false);
     }
   };
 
   const stopRecording = () => {
     setIsRecording(false);
+    setStatusMessage('READY');
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       recognitionRef.current.stop();
@@ -148,51 +135,43 @@ const AdminPage: React.FC = () => {
     <div className="p-4 bg-zinc-950 min-h-screen text-zinc-100 font-sans">
       <div className="max-w-6xl mx-auto flex justify-between items-center mb-6 py-2 border-b border-white/5">
         <div className="flex items-center gap-4">
-          <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-800'}`} />
+          <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse shadow-[0_0_10px_red]' : 'bg-zinc-800'}`} />
           <span className="text-[10px] font-black tracking-widest opacity-40 uppercase">{statusMessage}</span>
         </div>
         <div className="flex gap-6">
           {!isRecording ? (
-            <button onClick={startRecording} className="bg-blue-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all hover:bg-blue-500">START</button>
+            <button onClick={startRecording} className="bg-blue-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all hover:bg-blue-500">START SESSION</button>
           ) : (
-            <button onClick={stopRecording} className="bg-red-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all hover:bg-red-500">STOP</button>
+            <button onClick={stopRecording} className="bg-red-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all hover:bg-red-500">STOP SESSION</button>
           )}
-          <button onClick={() => { if(confirm("초기화?")) { syncData([]); setBlocks([]); } }} className="text-[10px] font-black opacity-20">RESET</button>
+          <button onClick={() => { if(confirm("Clear?")) { syncData([]); setBlocks([]); } }} className="text-[10px] font-black opacity-20 hover:opacity-100 px-2">RESET</button>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-120px)]">
-        <div className="flex flex-col relative">
-          <div className="flex justify-between items-center mb-4">
-             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Speech (Editable)</span>
-             {displayInterim.trim() && (
-               <button 
-                 onClick={() => processBuffer()} 
-                 className="bg-zinc-800 text-white text-[9px] font-black px-4 py-1.5 rounded-full border border-white/10 hover:bg-zinc-700 transition-colors"
-               >
-                 수정본 전송 (FORCE SEND)
-               </button>
-             )}
-          </div>
-          
-          {/* 수동 편집이 가능한 Textarea */}
-          <textarea
-            value={displayInterim}
-            onChange={handleInputChange}
-            placeholder="음성 인식 대기 중..."
-            className="flex-grow bg-transparent text-3xl md:text-5xl font-black leading-tight text-white/90 break-keep resize-none outline-none focus:text-blue-400 transition-colors"
-          />
-          <div className="mt-4 text-[9px] text-blue-500/50 font-medium">
-            * 오타가 보이면 클릭하여 직접 수정할 수 있습니다. 수정한 내용은 0.8초 후 자동 전송됩니다.
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-140px)]">
+        {/* 왼쪽: 모니터링 전용 (읽기 전용으로 변경하여 간섭 차단) */}
+        <div className="flex flex-col relative overflow-hidden">
+          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase italic">Live Monitoring (Read-only)</span>
+          <div className="text-3xl md:text-5xl font-black leading-tight text-white/30 break-keep">
+            {displayInterim || <span>...</span>}
           </div>
         </div>
 
+        {/* 오른쪽: 송출 결과 편집 창 (핵심 기능) */}
         <div className="flex flex-col overflow-hidden border-l border-white/5 pl-8">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Refined Presentation</span>
-          <div className="flex-grow overflow-y-auto space-y-12 scrollbar-hide pb-20">
+          <span className="text-[9px] text-blue-500 font-bold mb-4 tracking-widest uppercase">Presentation Stream (Click to Edit)</span>
+          <div className="flex-grow overflow-y-auto space-y-8 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
-              <div key={block.id} className={`transition-all duration-700 ${i === 0 ? 'opacity-100' : 'opacity-10 blur-[1px]'}`}>
-                <p className="text-2xl md:text-4xl font-bold leading-tight tracking-tighter">{block.refined}</p>
+              <div key={block.id} className={`group relative transition-all duration-500 ${i === 0 ? 'opacity-100' : 'opacity-40 hover:opacity-100'}`}>
+                <textarea
+                  value={block.refined}
+                  onChange={(e) => handleEditBlock(block.id, e.target.value)}
+                  className="w-full bg-transparent text-2xl md:text-3xl font-bold leading-tight tracking-tighter text-white border-none outline-none focus:text-blue-400 focus:bg-blue-500/5 rounded-lg p-2 transition-all resize-none"
+                  rows={2}
+                  spellCheck={false}
+                />
+                {i === 0 && <div className="ml-2 w-6 h-1 bg-blue-600/50 rounded-full" />}
+                <span className="absolute -left-6 top-4 text-[8px] opacity-0 group-hover:opacity-100 text-zinc-500 transition-opacity">EDIT</span>
               </div>
             ))}
           </div>
