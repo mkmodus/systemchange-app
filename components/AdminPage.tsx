@@ -21,19 +21,18 @@ const AdminPage: React.FC = () => {
     return () => stopRecording();
   }, []);
 
-  // Firebase 및 로컬 스토리지 동기화 (공통 함수)
   const syncData = useCallback((updatedBlocks: TextBlock[]) => {
     set(ref(db, 'interpretation/blocks'), updatedBlocks);
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(updatedBlocks));
   }, []);
 
-  // ⚡ 송출된 블록 내용 수정 함수
+  // 📝 송출된 블록 실시간 수정 함수
   const handleEditBlock = (id: string, newRefined: string) => {
     setBlocks(prev => {
       const updated = prev.map(block => 
         block.id === id ? { ...block, refined: newRefined } : block
       );
-      syncData(updated); // 수정 즉시 Firebase에 반영 (참가자 화면 변경)
+      syncData(updated);
       return updated;
     });
   };
@@ -45,7 +44,7 @@ const AdminPage: React.FC = () => {
     isProcessingRef.current = true;
     offsetRef.current = fullContentRef.current.length;
     setDisplayInterim(''); 
-    setStatusMessage('⚡ AI SYNC');
+    setStatusMessage('⚡ AI SYNCING');
 
     try {
       const refined = await refineTranscription(textToSend);
@@ -78,6 +77,8 @@ const AdminPage: React.FC = () => {
 
   const startRecording = async () => {
     try {
+      setStatusMessage('MIC REQUESTING...');
+      // 권한 강제 팝업 트리거
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach(track => track.stop());
 
@@ -110,7 +111,13 @@ const AdminPage: React.FC = () => {
         }
         fullContentRef.current = finalized;
         setDisplayInterim(finalized.substring(offsetRef.current) + interim);
+
         if (finalized.substring(offsetRef.current).length > 40) processBuffer();
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error === 'not-allowed') setStatusMessage('MIC BLOCKED');
+        setIsRecording(false);
       };
 
       recognition.onend = () => { if (isRecording) recognition.start(); };
@@ -131,47 +138,55 @@ const AdminPage: React.FC = () => {
     }
   };
 
+  const handleManualSend = () => {
+    if (displayInterim.trim()) {
+      fullContentRef.current += (fullContentRef.current ? ' ' : '') + displayInterim.trim();
+      processBuffer();
+    }
+  };
+
   return (
     <div className="p-4 bg-zinc-950 min-h-screen text-zinc-100 font-sans">
       <div className="max-w-6xl mx-auto flex justify-between items-center mb-6 py-2 border-b border-white/5">
         <div className="flex items-center gap-4">
-          <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse shadow-[0_0_10px_red]' : 'bg-zinc-800'}`} />
+          <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-800'}`} />
           <span className="text-[10px] font-black tracking-widest opacity-40 uppercase">{statusMessage}</span>
         </div>
         <div className="flex gap-6">
           {!isRecording ? (
-            <button onClick={startRecording} className="bg-blue-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all hover:bg-blue-500">START SESSION</button>
+            <button onClick={startRecording} className="bg-blue-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all active:scale-95">START SESSION</button>
           ) : (
-            <button onClick={stopRecording} className="bg-red-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all hover:bg-red-500">STOP SESSION</button>
+            <button onClick={stopRecording} className="bg-red-600 text-white text-[10px] font-black px-6 py-2 rounded-full transition-all active:scale-95">STOP SESSION</button>
           )}
-          <button onClick={() => { if(confirm("Clear?")) { syncData([]); setBlocks([]); } }} className="text-[10px] font-black opacity-20 hover:opacity-100 px-2">RESET</button>
+          <button onClick={() => { if(confirm("초기화?")) { syncData([]); setBlocks([]); } }} className="text-[10px] font-black opacity-20 hover:opacity-100">RESET</button>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-140px)]">
-        {/* 왼쪽: 모니터링 전용 (읽기 전용으로 변경하여 간섭 차단) */}
+        {/* 왼쪽: 모니터링 (연사가 99나 구구라고 말하는 것을 볼 수 있음) */}
         <div className="flex flex-col relative overflow-hidden">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase italic">Live Monitoring (Read-only)</span>
-          <div className="text-3xl md:text-5xl font-black leading-tight text-white/30 break-keep">
+          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase italic">Monitoring Stream</span>
+          <div className="text-3xl md:text-5xl font-black leading-tight text-white/20 break-keep">
             {displayInterim || <span>...</span>}
           </div>
+          {displayInterim.trim() && (
+            <button onClick={handleManualSend} className="mt-4 w-fit bg-zinc-800 text-[9px] font-black px-4 py-2 rounded-full border border-white/10 hover:bg-zinc-700">즉시 전송</button>
+          )}
         </div>
 
-        {/* 오른쪽: 송출 결과 편집 창 (핵심 기능) */}
+        {/* 오른쪽: 결과 및 수동 편집 (AI가 '99'를 '극우'로 바꾼 결과가 나타남) */}
         <div className="flex flex-col overflow-hidden border-l border-white/5 pl-8">
-          <span className="text-[9px] text-blue-500 font-bold mb-4 tracking-widest uppercase">Presentation Stream (Click to Edit)</span>
+          <span className="text-[9px] text-blue-500 font-bold mb-4 tracking-widest uppercase">Refined (Click to Edit)</span>
           <div className="flex-grow overflow-y-auto space-y-8 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
               <div key={block.id} className={`group relative transition-all duration-500 ${i === 0 ? 'opacity-100' : 'opacity-40 hover:opacity-100'}`}>
                 <textarea
                   value={block.refined}
                   onChange={(e) => handleEditBlock(block.id, e.target.value)}
-                  className="w-full bg-transparent text-2xl md:text-3xl font-bold leading-tight tracking-tighter text-white border-none outline-none focus:text-blue-400 focus:bg-blue-500/5 rounded-lg p-2 transition-all resize-none"
+                  className="w-full bg-transparent text-2xl md:text-3xl font-bold leading-tight tracking-tighter text-white border-none outline-none focus:text-blue-400 focus:bg-white/5 rounded-lg p-2 transition-all resize-none"
                   rows={2}
                   spellCheck={false}
                 />
-                {i === 0 && <div className="ml-2 w-6 h-1 bg-blue-600/50 rounded-full" />}
-                <span className="absolute -left-6 top-4 text-[8px] opacity-0 group-hover:opacity-100 text-zinc-500 transition-opacity">EDIT</span>
               </div>
             ))}
           </div>
