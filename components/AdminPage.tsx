@@ -26,14 +26,14 @@ const AdminPage: React.FC = () => {
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
   };
 
+  // ⚡ 보정 및 전송 함수
   const processBuffer = useCallback(async (forcedText?: string) => {
-    // 전송할 텍스트 결정 (수동 전송 시 forcedText 사용)
     const textToSend = (forcedText || finalizedBufferRef.current).trim();
-    
     if (isProcessingRef.current || textToSend.length < 1) return;
 
-    // [중요] 전송 시작 즉시 모든 입력란 비우기
     isProcessingRef.current = true;
+    
+    // [중요] 전송 시작 즉시 React 상태와 내부 Ref 모두 초기화
     finalizedBufferRef.current = ''; 
     setDisplayInterim(''); 
     setStatusMessage('⚡ AI SYNC');
@@ -62,42 +62,52 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
-  // 수동 전송 핸들러: 현재 화면의 글자를 즉시 비우고 전송
+  // 🔄 엔진 초기화 함수 (잔상 제거의 핵심)
+  const resetRecognitionEngine = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null; // 자동 재시작 방지
+      recognitionRef.current.stop();
+    }
+    // 엔진이 멈춘 뒤 0.1초 후 새 세션 시작 (엔진 내부 버퍼를 완전히 비움)
+    setTimeout(() => {
+      if (isRecording) startRecording();
+    }, 100);
+  }, [isRecording]);
+
+  // 🔴 수동 조작: 즉시 전송 버튼 클릭 시
   const handleManualSend = () => {
-    if (displayInterim.trim()) {
-      processBuffer(displayInterim);
+    const currentText = displayInterim.trim();
+    if (currentText) {
+      processBuffer(currentText); // 1. 텍스트 처리 시작
+      resetRecognitionEngine();  // 2. 엔진을 리셋하여 브라우저 메모리 비움
     }
   };
 
+  // 🕒 자동 전송 타이머 (0.4초 침묵 시)
   useEffect(() => {
     const currentText = finalizedBufferRef.current.trim();
     if (currentText && !isProcessingRef.current) {
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => processBuffer(), 400); // 0.4초 침묵 시 자동전송
+      timerRef.current = setTimeout(() => {
+        processBuffer();
+        resetRecognitionEngine(); // 자동 전송 시에도 엔진 리셋으로 잔상 방지
+      }, 400);
     }
     return () => clearTimeout(timerRef.current);
-  }, [displayInterim, processBuffer]);
+  }, [displayInterim, processBuffer, resetRecognitionEngine]);
 
-  // 좀비 방지 워치독 (3초 무응답 시 재시작)
+  // 🚨 좀비 감시 워치독
   useEffect(() => {
     let watchdog: any;
     if (isRecording) {
       watchdog = setInterval(() => {
         if (Date.now() - lastResultTimeRef.current > 3000 && !isProcessingRef.current) {
-          restartRecognition();
+          resetRecognitionEngine();
         }
       }, 1000);
     }
     return () => clearInterval(watchdog);
-  }, [isRecording]);
-
-  const restartRecognition = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.stop();
-    }
-    setTimeout(startRecording, 100);
-  };
+  }, [isRecording, resetRecognitionEngine]);
 
   const startRecording = () => {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
@@ -128,19 +138,21 @@ const AdminPage: React.FC = () => {
       }
       setDisplayInterim(finalizedBufferRef.current + interimContent);
 
-      // 22자 도달 시 자동 전송 (속도와 문맥의 균형)
-      if (finalizedBufferRef.current.length > 22) {
+      // 25자 도달 시 자동 전송 시도
+      if (finalizedBufferRef.current.length > 25) {
         processBuffer();
+        resetRecognitionEngine();
       }
     };
 
-    recognition.onend = () => { if (isRecording) restartRecognition(); };
+    recognition.onend = () => { if (isRecording) startRecording(); };
     recognition.start();
     recognitionRef.current = recognition;
   };
 
   const stopRecording = () => {
     setIsRecording(false);
+    setStatusMessage('READY');
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       recognitionRef.current.stop();
@@ -167,9 +179,11 @@ const AdminPage: React.FC = () => {
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-120px)]">
         <div className="flex flex-col relative overflow-hidden group">
           <div className="flex justify-between items-center mb-4">
-             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Input</span>
+             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Input (Engine: {isRecording ? 'ON' : 'OFF'})</span>
              {displayInterim.trim() && (
-               <button onClick={handleManualSend} className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full animate-bounce">즉시 전송</button>
+               <button onClick={handleManualSend} className="bg-blue-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full shadow-lg shadow-blue-900/40">
+                 즉시 전송
+               </button>
              )}
           </div>
           <div className="text-3xl md:text-5xl font-black leading-tight text-white/90 break-keep">
@@ -178,10 +192,10 @@ const AdminPage: React.FC = () => {
         </div>
 
         <div className="flex flex-col overflow-hidden border-l border-white/5 pl-8">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Presentation View</span>
-          <div className="flex-grow overflow-y-auto space-y-10 scrollbar-hide pb-20">
+          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Presentation Stream</span>
+          <div className="flex-grow overflow-y-auto space-y-12 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
-              <div key={block.id} className={`transition-all duration-500 ${i === 0 ? 'opacity-100' : 'opacity-10 blur-[1px]'}`}>
+              <div key={block.id} className={`transition-all duration-700 ${i === 0 ? 'opacity-100' : 'opacity-10 blur-[1px]'}`}>
                 <p className="text-2xl md:text-4xl font-bold leading-tight tracking-tighter">{block.refined}</p>
               </div>
             ))}
