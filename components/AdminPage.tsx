@@ -38,35 +38,53 @@ const AdminPage: React.FC = () => {
     isProcessingRef.current = true;
     setStatusMessage('AI 보정 및 전송 중...');
     setCountdown(0);
+    // 즉시 전송 시 현재 pendingText를 비워 다음 입력을 대기함
     if (!textOverride) setPendingText(''); 
 
-    const refined = await refineTranscription(textToProcess);
-    
-    const newBlock: TextBlock = {
-      id: Math.random().toString(36).substring(7),
-      original: textToProcess,
-      refined: refined,
-      timestamp: Date.now(),
-    };
+    try {
+      const refined = await refineTranscription(textToProcess);
+      
+      const newBlock: TextBlock = {
+        id: Math.random().toString(36).substring(7),
+        original: textToProcess,
+        refined: refined,
+        timestamp: Date.now(),
+      };
 
-    setBlocks(prev => {
-      const updated = [newBlock, ...prev].slice(0, 500);
-      syncData(updated);
-      return updated;
-    });
-
-    setStatusMessage(isRecording ? '음성 수신 중...' : '대기 중');
-    isProcessingRef.current = false;
+      setBlocks(prev => {
+        const updated = [newBlock, ...prev].slice(0, 500);
+        syncData(updated);
+        return updated;
+      });
+    } catch (error) {
+      console.error("AI 보정 실패:", error);
+    } finally {
+      setStatusMessage(isRecording ? '음성 수신 중...' : '대기 중');
+      isProcessingRef.current = false;
+    }
   }, [pendingText, isRecording]);
 
+  // --- [수정된 타이머 로직] ---
   useEffect(() => {
-    if (pendingText.trim() && !isProcessingRef.current) {
+    const trimmedText = pendingText.trim();
+    
+    if (trimmedText && !isProcessingRef.current) {
+      // 1. 글자 수가 80자를 넘어가면 pause 상관없이 즉시 전송 (40초 딜레이 방지)
+      if (trimmedText.length > 80) {
+        processPendingText();
+        return;
+      }
+
+      // 2. 일시 정지 감지 타이머 (1.5초 대기)
       if (timerRef.current) clearInterval(timerRef.current);
-      let timeLeft = 40;
-      setCountdown(40);
+      
+      let timeLeft = 15; // 1.5초
+      setCountdown(15);
+      
       timerRef.current = setInterval(() => {
-        timeLeft -= 1.25; 
+        timeLeft -= 1; 
         setCountdown(timeLeft);
+        
         if (timeLeft <= 0) {
           if (timerRef.current) clearInterval(timerRef.current);
           processPendingText();
@@ -76,8 +94,10 @@ const AdminPage: React.FC = () => {
       setCountdown(0);
       if (timerRef.current) clearInterval(timerRef.current);
     }
+
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pendingText, processPendingText]);
+  // -------------------------
 
   const verifyAuth = () => {
     if (authInput === '830411') {
@@ -98,21 +118,29 @@ const AdminPage: React.FC = () => {
     try {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
-      recognition.interimResults = true;
+      recognition.interimResults = true; // 중간 결과 수신 활성화
       recognition.lang = 'ko-KR';
+
       recognition.onstart = () => {
         setIsRecording(true);
         setStatusMessage('음성 수신 중...');
       };
+
       recognition.onresult = (event: any) => {
         let finalTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          }
         }
-        if (finalTranscript) setPendingText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+        if (finalTranscript) {
+          setPendingText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+        }
       };
+
       recognition.onerror = () => stopRecording();
       recognition.onend = () => { if (isRecording) { try { recognition.start(); } catch(e) {} } };
+
       recognition.start();
       recognitionRef.current = recognition;
     } catch (e) {
@@ -128,9 +156,7 @@ const AdminPage: React.FC = () => {
     setIsRecording(false);
     setStatusMessage('대기 중');
     if (pendingText.trim()) {
-      const textToSave = pendingText;
-      setPendingText('');
-      processPendingText(textToSave);
+      processPendingText();
     }
   };
 
@@ -143,7 +169,6 @@ const AdminPage: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6">
-      {/* 관리자 인증 모달 */}
       {showAuthModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md">
           <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 w-full max-w-md text-center space-y-4">
@@ -164,7 +189,6 @@ const AdminPage: React.FC = () => {
         </div>
       )}
 
-      {/* 헤더 부분 */}
       <div className="flex justify-between items-center bg-zinc-900 p-6 rounded-2xl border border-zinc-800">
         <div className="flex items-center gap-4">
           <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-red-600 animate-pulse' : 'bg-zinc-700'}`} />
@@ -175,47 +199,40 @@ const AdminPage: React.FC = () => {
         </div>
         <div className="flex gap-2">
           {!isRecording ? (
-            <button onClick={() => setShowAuthModal(true)} className="bg-white text-black px-6 py-2 rounded-full font-bold hover:bg-zinc-200 transition-all">통역 시작</button>
+            <button onClick={() => setShowAuthModal(true)} className="bg-white text-black px-6 py-2 rounded-full font-bold">통역 시작</button>
           ) : (
-            <button onClick={stopRecording} className="bg-red-600 text-white px-6 py-2 rounded-full font-bold hover:bg-red-700 transition-all">통역 중지</button>
+            <button onClick={stopRecording} className="bg-red-600 text-white px-6 py-2 rounded-full font-bold">중지</button>
           )}
-          <button onClick={clearHistory} className="border border-zinc-700 text-zinc-400 px-4 py-2 rounded-full text-sm font-bold hover:bg-zinc-800">초기화</button>
+          <button onClick={clearHistory} className="border border-zinc-700 text-zinc-400 px-4 py-2 rounded-full text-sm font-bold">초기화</button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 왼쪽: 음성 인식 영역 */}
         <div className="bg-zinc-900 p-5 rounded-2xl border border-zinc-800 h-[500px] flex flex-col">
-          <div className="flex justify-between mb-3">
-            <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">STT Input Stream</span>
+          <div className="flex justify-between mb-3 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
+            <span>STT Input (Auto-send at 80 chars)</span>
+            <span>{pendingText.length} / 80</span>
           </div>
           <textarea
             value={pendingText}
             onChange={(e) => setPendingText(e.target.value)}
-            className="flex-grow bg-black/30 rounded-xl p-4 text-white text-xl resize-none outline-none border border-zinc-800 focus:border-blue-500/50 transition-colors"
-            placeholder="음성을 기다리고 있습니다... 실시간으로 내용을 직접 수정할 수 있습니다."
+            className="flex-grow bg-black/30 rounded-xl p-4 text-white text-xl resize-none outline-none border border-zinc-800"
+            placeholder="음성을 기다리고 있습니다..."
           />
           <div className="h-1.5 bg-zinc-800 w-full mt-4 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 transition-all duration-100 ease-linear" style={{ width: `${countdown}%` }} />
+            <div className="h-full bg-blue-500 transition-all duration-100 ease-linear" style={{ width: `${(countdown / 15) * 100}%` }} />
           </div>
         </div>
 
-        {/* 오른쪽: AI 정제된 결과 영역 */}
         <div className="bg-zinc-900 p-5 rounded-2xl border border-zinc-800 h-[500px] flex flex-col">
-          <div className="flex justify-between mb-3">
-            <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">AI Refined (Sync with Presentation)</span>
-          </div>
-          <div className="flex-grow overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-            {blocks.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-zinc-600 text-sm">기록된 통역 내용이 없습니다.</div>
-            ) : (
-              blocks.map(block => (
-                <div key={block.id} className="bg-black/30 p-5 rounded-xl border border-zinc-800 animate-in fade-in slide-in-from-bottom-2">
-                  <p className="text-white text-lg font-medium leading-relaxed">{block.refined}</p>
-                  <p className="text-[9px] text-zinc-600 mt-3 font-mono">{new Date(block.timestamp).toLocaleTimeString()}</p>
-                </div>
-              ))
-            )}
+          <div className="mb-3 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">AI Refined Stream</div>
+          <div className="flex-grow overflow-y-auto space-y-4 pr-2">
+            {blocks.map(block => (
+              <div key={block.id} className="bg-black/30 p-5 rounded-xl border border-zinc-800">
+                <p className="text-white text-lg font-medium leading-relaxed">{block.refined}</p>
+                <p className="text-[9px] text-zinc-600 mt-3 font-mono">{new Date(block.timestamp).toLocaleTimeString()}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
