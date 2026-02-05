@@ -105,16 +105,4 @@ const AdminPage: React.FC = () => {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
     if (!SpeechRecognition) {
       setStatusMessage("브라우저가 음성 인식을 지원하지 않습니다.");
-      alert("크롬 브라우저를 이용해주세요.");
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'ko-KR';
-
-      recognition.onstart = () => {
-        setIsRecording(true);
-        setStatusMessage('
+      alert("크롬 브라우저
