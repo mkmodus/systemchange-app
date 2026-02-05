@@ -8,37 +8,45 @@ const AdminPage: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState('READY');
   const [pendingText, setPendingText] = useState('');
   const [blocks, setBlocks] = useState<TextBlock[]>([]);
+  const [countdown, setCountdown] = useState(0); 
   const [processingSnapshot, setProcessingSnapshot] = useState(''); 
+  
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authInput, setAuthInput] = useState('');
   
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
 
+  // 초기 로드
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
     if (saved) setBlocks(JSON.parse(saved));
   }, []);
 
-  const syncData = (newBlocks: TextBlock[]) => {
-    setBlocks(newBlocks);
-    localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
-    set(ref(db, 'interpretation/blocks'), newBlocks);
+  // Firebase 실시간 동기화 (최적화: 직접 호출)
+  const syncToFirebase = (updatedBlocks: TextBlock[]) => {
+    const blocksRef = ref(db, 'interpretation/blocks');
+    set(blocksRef, updatedBlocks);
+    localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(updatedBlocks));
   };
 
+  // ⚡ AI 보정 및 전송 (Express Pipeline)
   const processPendingText = useCallback(async () => {
-    // 2자 미만은 무시하여 불필요한 API 호출 차단
-    if (isProcessingRef.current || pendingText.trim().length < 2) return;
-
     const textToProcess = pendingText.trim();
+    if (isProcessingRef.current || textToProcess.length < 2) return;
+
+    // 1. Snapshot 생성 후 즉시 버퍼 비우기 (음성 누락 방지 핵심)
+    isProcessingRef.current = true;
     setProcessingSnapshot(textToProcess);
     setPendingText(''); 
-    
-    isProcessingRef.current = true;
-    setStatusMessage('⚡ AI'); // 상태 메시지도 짧게 변경하여 렌더링 최적화
+    setCountdown(0);
+    setStatusMessage('⚡ AI');
 
     try {
-      // 🚀 Gemini 1.5 Flash 모델 사용 시 이 부분에서 약 0.5~1초 내외로 결과가 나옵니다.
+      // 2. 초저지연 AI 호출
       const refined = await refineTranscription(textToProcess);
+      
       const newBlock: TextBlock = {
         id: Math.random().toString(36).substring(7),
         original: textToProcess,
@@ -46,15 +54,21 @@ const AdminPage: React.FC = () => {
         timestamp: Date.now(),
       };
 
+      // 3. 상태 업데이트 및 전송
       setBlocks(prev => {
         const updated = [newBlock, ...prev].slice(0, 500);
-        syncData(updated);
+        syncToFirebase(updated);
         return updated;
       });
     } catch (error) {
-      console.error("AI Error:", error);
-      const errBlock = { id: 'err-'+Date.now(), original: textToProcess, refined: textToProcess, timestamp: Date.now() };
-      setBlocks(prev => { const up = [errBlock, ...prev]; syncData(up); return up; });
+      console.error("Sync Error:", error);
+      // 에러 발생 시 딜레이 없이 원문 노출
+      const fallback = { id: `err-${Date.now()}`, original: textToProcess, refined: textToProcess, timestamp: Date.now() };
+      setBlocks(prev => {
+        const updated = [fallback, ...prev];
+        syncToFirebase(updated);
+        return updated;
+      });
     } finally {
       isProcessingRef.current = false;
       setProcessingSnapshot('');
@@ -62,99 +76,15 @@ const AdminPage: React.FC = () => {
     }
   }, [pendingText, isRecording]);
 
-  // ⚡ 초단문 트리거 (8자 이상 시 즉시 전송)
+  // ⚡ 마이크로 타이머: 10자 초과 시 즉시, 0.3초 침묵 시 자동 전송
   useEffect(() => {
     const trimmed = pendingText.trim();
     if (trimmed && !isProcessingRef.current) {
-      if (trimmed.length > 8) { 
+      if (trimmed.length > 10) { 
         processPendingText(); 
         return; 
       }
 
       if (timerRef.current) clearTimeout(timerRef.current);
-      // 침묵 대기 시간 0.2초 (거의 즉시)
-      timerRef.current = setTimeout(() => {
-        processPendingText();
-      }, 200);
-    }
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [pendingText, processPendingText]);
-
-  const startRecording = () => {
-    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    if (!SpeechRecognition) return;
-    
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'ko-KR';
-
-    recognition.onstart = () => setIsRecording(true);
-    recognition.onresult = (event: any) => {
-      let currentFinal = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) currentFinal += event.results[i][0].transcript;
-      }
       
-      if (currentFinal) {
-        setPendingText(prev => prev + (prev ? ' ' : '') + currentFinal);
-        // 확정 데이터가 들어오면 대기시간 없이 즉시 처리
-        processPendingText(); 
-      }
-    };
-    recognition.onend = () => { if (isRecording) try { recognition.start(); } catch(e) {} };
-    recognition.start();
-    recognitionRef.current = recognition;
-  };
-
-  const stopRecording = () => {
-    if (recognitionRef.current) recognitionRef.current.stop();
-    setIsRecording(false);
-  };
-
-  return (
-    <div className="p-4 bg-black min-h-screen text-white font-sans overflow-hidden">
-      <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4">
-        <div className="flex items-center gap-3">
-          <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-800'}`} />
-          <span className="text-[10px] font-black tracking-widest">{statusMessage}</span>
-        </div>
-        {!isRecording ? (
-          <button onClick={startRecording} className="text-[10px] font-black bg-white text-black px-4 py-1 rounded-full">START REC</button>
-        ) : (
-          <button onClick={stopRecording} className="text-[10px] font-black bg-red-600 px-4 py-1 rounded-full">STOP</button>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[calc(100vh-120px)]">
-        <div className="flex flex-col relative">
-          <textarea
-            value={pendingText}
-            onChange={(e) => setPendingText(e.target.value)}
-            className="flex-grow bg-transparent text-5xl font-black leading-tight resize-none outline-none placeholder-zinc-900"
-            placeholder="..."
-          />
-          {processingSnapshot && (
-            <div className="text-blue-500 text-xs font-bold animate-pulse">
-              SYNCING: {processingSnapshot}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-col overflow-hidden">
-          <div className="flex-grow overflow-y-auto space-y-6 scrollbar-hide">
-            {blocks.map((block, i) => (
-              <div key={block.id} className={`transition-all duration-300 ${i === 0 ? 'opacity-100' : 'opacity-10'}`}>
-                <p className={`${i === 0 ? 'text-4xl' : 'text-xl'} font-bold leading-tight`}>
-                  {block.refined}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default AdminPage;
+      let timeLeft = 3
