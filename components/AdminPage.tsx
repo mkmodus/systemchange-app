@@ -33,14 +33,15 @@ const AdminPage: React.FC = () => {
     set(ref(db, 'interpretation/blocks'), newBlocks);
   };
 
-  // [개선] 음성 누락 방지를 위한 전송 로직
+  // [중요] 음성 누락 방지를 위한 전역 전송 로직
   const processPendingText = useCallback(async () => {
     if (isProcessingRef.current) return;
     
     const textToProcess = pendingText.trim();
     if (!textToProcess) return;
 
-    // 보정 시작 전 즉시 비움 (보정 도중 들어오는 음성 누락 방지)
+    // 1. AI에게 보내기 직전에 입력창을 먼저 비웁니다.
+    // 이렇게 해야 AI가 처리하는 동안(2~3초) 들어오는 새로운 음성이 유실되지 않고 쌓입니다.
     setPendingText(''); 
     isProcessingRef.current = true;
     setStatusMessage('AI 보정 및 전송 중...');
@@ -81,7 +82,7 @@ const AdminPage: React.FC = () => {
     }
   }, [pendingText, isRecording]);
 
-  // 타이머 로직
+  // 타이머 로직: 1.5초간 침묵하거나 80자가 넘으면 자동 전송
   useEffect(() => {
     const trimmedText = pendingText.trim();
     if (trimmedText && !isProcessingRef.current) {
@@ -144,41 +145,4 @@ const AdminPage: React.FC = () => {
             finalTranscript += event.results[i][0].transcript;
           }
         }
-        if (finalTranscript) {
-          setPendingText(prev => prev + (prev ? ' ' : '') + finalTranscript);
-        }
-      };
-
-      recognition.onerror = () => stopRecording();
-      recognition.onend = () => { if (isRecording) { try { recognition.start(); } catch(e) {} } };
-
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (e) {
-      setStatusMessage("초기화 실패");
-    }
-  };
-
-  const stopRecording = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
-    setIsRecording(false);
-    setStatusMessage('대기 중');
-    if (pendingText.trim()) {
-      processPendingText();
-    }
-  };
-
-  const clearHistory = () => {
-    if (confirm("기록을 삭제하시겠습니까?")) {
-      syncData([]);
-      setPendingText('');
-    }
-  };
-
-  return (
-    <div className="p-6 space-y-6">
-      {/* 인증 모달 */}
-      {showAuthModal && (
+        if (finalTranscript
