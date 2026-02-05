@@ -91,8 +91,8 @@ const AdminPage: React.FC = () => {
 
       if (timerRef.current) clearInterval(timerRef.current);
       
-      let timeLeft = 15; // 약 1.5초 대기
-      setCountdown(15);
+      let timeLeft = 10; // 약 1초 대기
+      setCountdown(10);
       
       timerRef.current = setInterval(() => {
         timeLeft -= 1; 
