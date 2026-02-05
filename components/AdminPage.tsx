@@ -9,16 +9,23 @@ const AdminPage: React.FC = () => {
   const [displayInterim, setDisplayInterim] = useState('');
   const [blocks, setBlocks] = useState<TextBlock[]>([]);
   
-  const finalizedBufferRef = useRef(''); 
   const recognitionRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
   const timerRef = useRef<any>(null);
-  const lastResultTimeRef = useRef(Date.now());
+  
+  // 🛡️ 잔상 방지 및 데이터 관리를 위한 핵심 Ref
+  const lastProcessedIndexRef = useRef(0); // 이미 전송 완료된 결과의 인덱스
+  const currentFinalizedTextRef = useRef(''); // 현재 세션에서 아직 안 보낸 확정 텍스트
 
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
     if (saved) setBlocks(JSON.parse(saved));
-    return () => stopRecording();
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      }
+    };
   }, []);
 
   const syncData = (newBlocks: TextBlock[]) => {
@@ -26,34 +33,23 @@ const AdminPage: React.FC = () => {
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
   };
 
-  // 🔄 엔진 완전 리셋 (잔상 제거 핵심)
-  const resetEngine = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.stop();
-    }
-    setTimeout(() => {
-      if (isRecording) startRecording();
-    }, 50); // 아주 짧은 찰나에 재시작
-  }, [isRecording]);
-
-  // ⚡ 보정 프로세스
-  const processBuffer = useCallback(async (forcedText?: string) => {
-    const textToSend = (forcedText || finalizedBufferRef.current).trim();
-    if (isProcessingRef.current || textToSend.length < 2) return;
+  // ⚡ 보정 및 전송 함수 (엔진을 끄지 않고 인덱스만 갱신)
+  const processBuffer = useCallback(async (text: string, nextIndex: number) => {
+    if (isProcessingRef.current || text.trim().length < 2) return;
 
     isProcessingRef.current = true;
     
-    // [즉시 초기화] 전송 시작과 동시에 화면과 버퍼를 비움
-    finalizedBufferRef.current = ''; 
-    setDisplayInterim(''); 
-    setStatusMessage('⚡ AI SYNC');
+    // [중요] 즉시 화면 비우기: 다음 결과는 nextIndex 이후부터만 읽음
+    lastProcessedIndexRef.current = nextIndex;
+    currentFinalizedTextRef.current = '';
+    setDisplayInterim('');
+    setStatusMessage('⚡ AI');
 
     try {
-      const refined = await refineTranscription(textToSend);
+      const refined = await refineTranscription(text);
       const newBlock: TextBlock = {
         id: Math.random().toString(36).substring(7),
-        original: textToSend,
+        original: text,
         refined: refined,
         timestamp: Date.now(),
       };
@@ -63,28 +59,14 @@ const AdminPage: React.FC = () => {
         syncData(updated);
         return updated;
       });
+    } catch (e) {
+      const fallback = { id: `err-${Date.now()}`, original: text, refined: text, timestamp: Date.now() };
+      setBlocks(prev => { const up = [fallback, ...prev]; syncData(up); return up; });
     } finally {
       isProcessingRef.current = false;
       setStatusMessage('LIVE');
-      lastResultTimeRef.current = Date.now();
     }
   }, []);
-
-  // 🔴 수동/자동 전송 시 엔진 리셋 병행
-  const handleSend = (text?: string) => {
-    processBuffer(text);
-    resetEngine();
-  };
-
-  // 타이머: 0.5초 침묵 시 자동 전송 (정확도를 위해 대기시간 소폭 상향)
-  useEffect(() => {
-    const currentText = finalizedBufferRef.current.trim();
-    if (currentText && !isProcessingRef.current) {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => handleSend(), 500);
-    }
-    return () => clearTimeout(timerRef.current);
-  }, [displayInterim]);
 
   const startRecording = () => {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
@@ -98,34 +80,55 @@ const AdminPage: React.FC = () => {
     recognition.onstart = () => {
       setIsRecording(true);
       setStatusMessage('LIVE');
-      lastResultTimeRef.current = Date.now();
+      lastProcessedIndexRef.current = 0;
     };
 
     recognition.onresult = (event: any) => {
-      lastResultTimeRef.current = Date.now();
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
+      let interimContent = '';
+      let finalizedSinceLast = '';
+      const totalResults = event.results.length;
+
+      // [핵심] 이미 처리한 인덱스(lastProcessedIndexRef) 이후의 결과만 처리
+      for (let i = lastProcessedIndexRef.current; i < totalResults; ++i) {
+        const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalizedBufferRef.current += (finalizedBufferRef.current ? ' ' : '') + event.results[i][0].transcript;
+          finalizedSinceLast += transcript;
         } else {
-          interim += event.results[i][0].transcript;
+          interimContent += transcript;
         }
       }
-      setDisplayInterim(finalizedBufferRef.current + interim);
 
-      // 🚀 정확도를 위한 적정 임계치: 30자
-      if (finalizedBufferRef.current.length > 30) {
-        handleSend();
+      currentFinalizedTextRef.current = finalizedSinceLast;
+      setDisplayInterim(finalizedSinceLast + interimContent);
+
+      // 정확도와 속도의 균형: 25자 도달 시 혹은 0.5초 침묵 시 전송
+      if (finalizedSinceLast.length > 25) {
+        processBuffer(finalizedSinceLast, totalResults);
+      }
+
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (finalizedSinceLast.trim()) {
+        timerRef.current = setTimeout(() => {
+          processBuffer(finalizedSinceLast, totalResults);
+        }, 500);
       }
     };
 
-    recognition.onend = () => { if (isRecording) startRecording(); };
+    // 엔진 끊김 방지 (자동 재시작)
+    recognition.onend = () => {
+      if (isRecording) {
+        lastProcessedIndexRef.current = 0; // 세션 재시작 시 인덱스 초기화
+        try { recognition.start(); } catch(e) {}
+      }
+    };
+
     recognition.start();
     recognitionRef.current = recognition;
   };
 
   const stopRecording = () => {
     setIsRecording(false);
+    setStatusMessage('READY');
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       recognitionRef.current.stop();
@@ -133,28 +136,33 @@ const AdminPage: React.FC = () => {
   };
 
   return (
-    <div className="p-4 bg-zinc-950 min-h-screen text-zinc-100 font-sans">
+    <div className="p-4 bg-zinc-950 min-h-screen text-zinc-100 font-sans selection:bg-blue-500/30">
       <div className="max-w-6xl mx-auto flex justify-between items-center mb-6 py-2 border-b border-white/5">
         <div className="flex items-center gap-4">
           <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-800'}`} />
-          <span className="text-[10px] font-black tracking-widest opacity-40 uppercase">{statusMessage}</span>
+          <span className="text-[10px] font-black tracking-[0.3em] uppercase opacity-40">{statusMessage}</span>
         </div>
         <div className="flex gap-6">
           {!isRecording ? (
-            <button onClick={startRecording} className="text-[10px] font-black text-blue-500">START</button>
+            <button onClick={startRecording} className="text-[10px] font-black tracking-widest text-blue-500">START</button>
           ) : (
-            <button onClick={stopRecording} className="text-[10px] font-black text-red-500">STOP</button>
+            <button onClick={stopRecording} className="text-[10px] font-black tracking-widest text-red-500">STOP</button>
           )}
-          <button onClick={() => { if(confirm("초기화?")) syncData([]); setBlocks([]); }} className="text-[10px] font-black opacity-20">CLEAR</button>
+          <button onClick={() => { if(confirm("Clear?")) syncData([]); setBlocks([]); }} className="text-[10px] font-black tracking-widest opacity-20">CLEAR</button>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-120px)]">
-        <div className="flex flex-col relative overflow-hidden group">
+        <div className="flex flex-col relative group">
           <div className="flex justify-between items-center mb-4">
              <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Input</span>
              {displayInterim.trim() && (
-               <button onClick={() => handleSend(displayInterim)} className="bg-blue-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full">즉시 전송</button>
+               <button 
+                onClick={() => processBuffer(displayInterim, recognitionRef.current ? recognitionRef.current.historyLength || 0 : 0)} 
+                className="bg-blue-600 text-white text-[10px] font-black px-4 py-1.5 rounded-full"
+               >
+                 즉시 전송
+               </button>
              )}
           </div>
           <div className="text-3xl md:text-5xl font-black leading-tight text-white/90 break-keep">
@@ -163,7 +171,7 @@ const AdminPage: React.FC = () => {
         </div>
 
         <div className="flex flex-col overflow-hidden border-l border-white/5 pl-8">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Presentation Stream</span>
+          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Refined Stream</span>
           <div className="flex-grow overflow-y-auto space-y-12 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
               <div key={block.id} className={`transition-all duration-700 ${i === 0 ? 'opacity-100' : 'opacity-10 blur-[1px]'}`}>
