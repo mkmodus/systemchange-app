@@ -28,7 +28,7 @@ export const refineTranscription = async (rawText: string): Promise<string> => {
 
 [출력 지침]
 - 인사말이나 설명 없이 오직 교정된 텍스트만 출력하십시오.`,
-        temperature: 0.1,
+        temperature: 0,
       },
     });
 
