@@ -18,7 +18,7 @@ const AdminPage: React.FC = () => {
   const timerRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
 
-  // 로컬 저장소 초기 로드
+  // 로컬 저장소 초기 데이터 로드
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
     if (saved) {
@@ -26,14 +26,14 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
-  // 데이터 동기화 함수
+  // 모든 기기에 실시간 데이터를 전송하는 함수
   const syncData = (newBlocks: TextBlock[]) => {
     setBlocks(newBlocks);
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
     set(ref(db, 'interpretation/blocks'), newBlocks);
   };
 
-  // [중요] 음성 누락 방지를 위한 전역 전송 로직
+  // [개선] 음성 누락 방지 및 보정 전송 로직
   const processPendingText = useCallback(async () => {
     if (isProcessingRef.current) return;
     
@@ -41,7 +41,7 @@ const AdminPage: React.FC = () => {
     if (!textToProcess) return;
 
     // 1. AI에게 보내기 직전에 입력창을 먼저 비웁니다.
-    // 이렇게 해야 AI가 처리하는 동안(2~3초) 들어오는 새로운 음성이 유실되지 않고 쌓입니다.
+    // 이렇게 해야 AI가 연산하는 수 초 동안 들어오는 음성이 지워지지 않고 새롭게 쌓입니다.
     setPendingText(''); 
     isProcessingRef.current = true;
     setStatusMessage('AI 보정 및 전송 중...');
@@ -64,7 +64,7 @@ const AdminPage: React.FC = () => {
       });
     } catch (error) {
       console.error("AI 보정 오류:", error);
-      // 에러 시 원문이라도 전송하여 기록 유지
+      // 에러가 나더라도 기록 손실을 막기 위해 원문을 그대로 전송합니다.
       const errorBlock: TextBlock = {
         id: 'err-' + Date.now(),
         original: textToProcess,
@@ -111,38 +111,4 @@ const AdminPage: React.FC = () => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pendingText, processPendingText]);
 
-  const verifyAuth = () => {
-    if (authInput === '830411') {
-      setShowAuthModal(false);
-      startRecording();
-    } else {
-      setAuthError(true);
-      setAuthInput('');
-    }
-  };
-
-  const startRecording = () => {
-    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    if (!SpeechRecognition) {
-      setStatusMessage("인식 지원 불가");
-      return;
-    }
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'ko-KR';
-
-      recognition.onstart = () => {
-        setIsRecording(true);
-        setStatusMessage('음성 수신 중...');
-      };
-
-      recognition.onresult = (event: any) => {
-        let finalTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          }
-        }
-        if (finalTranscript
+  const verifyAuth =
