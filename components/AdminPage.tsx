@@ -12,7 +12,6 @@ const AdminPage: React.FC = () => {
   const recognitionRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
   const timerRef = useRef<any>(null);
-  
   const fullContentRef = useRef(''); 
   const offsetRef = useRef(0); 
 
@@ -22,9 +21,9 @@ const AdminPage: React.FC = () => {
     return () => stopRecording();
   }, []);
 
-  const syncData = (newBlocks: TextBlock[]) => {
-    set(ref(db, 'interpretation/blocks'), newBlocks);
-    localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
+  const syncData = (updatedBlocks: TextBlock[]) => {
+    set(ref(db, 'interpretation/blocks'), updatedBlocks);
+    localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(updatedBlocks));
   };
 
   const processBuffer = useCallback(async () => {
@@ -34,7 +33,7 @@ const AdminPage: React.FC = () => {
     isProcessingRef.current = true;
     offsetRef.current = fullContentRef.current.length;
     setDisplayInterim(''); 
-    setStatusMessage('⚡ AI SYNC');
+    setStatusMessage('⚡ AI SYNCING');
 
     try {
       const refined = await refineTranscription(textToSend);
@@ -56,24 +55,21 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
+  // 🚀 정확도를 위한 전송 제어 (35자 임계치 / 0.7초 침묵)
   useEffect(() => {
     const currentUnsent = fullContentRef.current.substring(offsetRef.current).trim();
     if (currentUnsent && !isProcessingRef.current) {
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(processBuffer, 600);
+      timerRef.current = setTimeout(processBuffer, 700);
     }
     return () => clearTimeout(timerRef.current);
   }, [displayInterim, processBuffer]);
 
-  // 🚀 [강력 처방] 마이크 권한 강제 획득 및 시작
   const startRecording = async () => {
     try {
-      setStatusMessage('REQUESTING MIC...');
-      
-      // 1. 브라우저에게 마이크 사용 권한을 명시적으로 요청 (이게 팝업을 강제로 띄웁니다)
+      setStatusMessage('MIC CHECK...');
+      // 마이크 권한 강제 트리거
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // 권한 확인 후 스트림 즉시 해제 (음성 인식 엔진이 대신 쓸 수 있게)
       stream.getTracks().forEach(track => track.stop());
 
       const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
@@ -105,25 +101,22 @@ const AdminPage: React.FC = () => {
         }
         fullContentRef.current = finalized;
         setDisplayInterim(finalized.substring(offsetRef.current) + interim);
-        if (finalized.substring(offsetRef.current).length > 30) processBuffer();
+
+        // [정확도 최적화] AI가 문맥을 파악할 수 있도록 35자 이상일 때 전송
+        if (finalized.substring(offsetRef.current).length > 35) {
+          processBuffer();
+        }
       };
 
-      recognition.onerror = (event: any) => {
-        if (event.error === 'not-allowed') {
-          setStatusMessage('MIC BLOCKED');
-        } else {
-          setStatusMessage(`ERROR: ${event.error}`);
-        }
+      recognition.onerror = (e: any) => {
+        if (e.error === 'not-allowed') setStatusMessage('MIC BLOCKED');
         setIsRecording(false);
       };
 
-      recognition.onend = () => { if (isRecording) try { recognition.start(); } catch(e) {} };
-
+      recognition.onend = () => { if (isRecording) recognition.start(); };
       recognition.start();
       recognitionRef.current = recognition;
-
     } catch (err) {
-      console.error("Mic Permission Denied:", err);
       setStatusMessage('MIC BLOCKED');
       setIsRecording(false);
     }
@@ -163,11 +156,11 @@ const AdminPage: React.FC = () => {
       </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-10 h-[calc(100vh-140px)]">
-        <div className="flex flex-col relative group">
+        <div className="flex flex-col relative">
           <div className="flex justify-between items-center mb-4">
-             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Input</span>
+             <span className="text-[9px] text-zinc-600 font-bold tracking-widest uppercase">Live Speech</span>
              {displayInterim.trim() && (
-               <button onClick={handleManualSend} className="bg-zinc-800 hover:bg-zinc-700 text-white text-[9px] font-black px-4 py-1.5 rounded-full border border-white/10">즉시 전송 (ENTER)</button>
+               <button onClick={handleManualSend} className="bg-zinc-800 text-white text-[9px] font-black px-4 py-1.5 rounded-full border border-white/10 hover:bg-zinc-700">즉시 전송</button>
              )}
           </div>
           <div className="text-3xl md:text-5xl font-black leading-tight text-white/90 break-keep">
@@ -176,7 +169,7 @@ const AdminPage: React.FC = () => {
         </div>
 
         <div className="flex flex-col overflow-hidden border-l border-white/5 pl-8">
-          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Presentation Stream</span>
+          <span className="text-[9px] text-zinc-600 font-bold mb-4 tracking-widest uppercase">Refined Presentation</span>
           <div className="flex-grow overflow-y-auto space-y-12 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
               <div key={block.id} className={`transition-all duration-700 ${i === 0 ? 'opacity-100' : 'opacity-10 blur-[1px]'}`}>
