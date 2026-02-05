@@ -55,21 +55,18 @@ const AdminPage: React.FC = () => {
       return updated;
     });
 
-    setStatusMessage(isRecording ? '2026 포럼 현장 음성 수신 중...' : '대기 중');
+    setStatusMessage(isRecording ? '음성 수신 중...' : '대기 중');
     isProcessingRef.current = false;
   }, [pendingText, isRecording]);
 
   useEffect(() => {
     if (pendingText.trim() && !isProcessingRef.current) {
       if (timerRef.current) clearInterval(timerRef.current);
-      
       let timeLeft = 70;
       setCountdown(70);
-      
       timerRef.current = setInterval(() => {
         timeLeft -= 1.25; 
         setCountdown(timeLeft);
-        
         if (timeLeft <= 0) {
           if (timerRef.current) clearInterval(timerRef.current);
           processPendingText();
@@ -79,17 +76,8 @@ const AdminPage: React.FC = () => {
       setCountdown(0);
       if (timerRef.current) clearInterval(timerRef.current);
     }
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pendingText, processPendingText]);
-
-  const handleStartRequest = () => {
-    setShowAuthModal(true);
-    setAuthInput('');
-    setAuthError(false);
-  };
 
   const verifyAuth = () => {
     if (authInput === '830411') {
@@ -104,5 +92,68 @@ const AdminPage: React.FC = () => {
   const startRecording = () => {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
     if (!SpeechRecognition) {
-      setStatusMessage("브라우저가 음성 인식을 지원하지 않습니다.");
-      alert("크롬 브라우저
+      setStatusMessage("인식 지원 불가");
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'ko-KR';
+      recognition.onstart = () => {
+        setIsRecording(true);
+        setStatusMessage('음성 수신 중...');
+      };
+      recognition.onresult = (event: any) => {
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+        }
+        if (finalTranscript) setPendingText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+      };
+      recognition.onerror = () => stopRecording();
+      recognition.onend = () => { if (isRecording) { try { recognition.start(); } catch(e) {} } };
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (e) {
+      setStatusMessage("초기화 실패");
+    }
+  };
+
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setIsRecording(false);
+    setStatusMessage('대기 중');
+    if (pendingText.trim()) {
+      const textToSave = pendingText;
+      setPendingText('');
+      processPendingText(textToSave);
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {showAuthModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md">
+          <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 w-full max-w-md text-center space-y-4">
+            <h2 className="text-xl font-bold text-white">관리자 인증</h2>
+            <input 
+              type="password" 
+              value={authInput}
+              onChange={(e) => setAuthInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && verifyAuth()}
+              className="w-full bg-black border border-zinc-700 rounded-xl p-4 text-center text-2xl text-white"
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setShowAuthModal(false)} className="flex-1 p-3 text-zinc-400">취소</button>
+              <button onClick={verifyAuth} className="flex-1 p-3 bg-blue-600 rounded-xl text-white">확인</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-between items-center bg-zinc-900 p-6
