@@ -18,7 +18,6 @@ const AdminPage: React.FC = () => {
   const timerRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
 
-  // 로컬 저장소 초기 데이터 로드
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
     if (saved) {
@@ -26,22 +25,20 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
-  // 모든 기기에 실시간 데이터를 전송하는 함수
   const syncData = (newBlocks: TextBlock[]) => {
     setBlocks(newBlocks);
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
     set(ref(db, 'interpretation/blocks'), newBlocks);
   };
 
-  // [개선] 음성 누락 방지 및 보정 전송 로직
+  // [핵심] 음성 누락 방지 로직: 전송 시작 전 데이터를 즉시 비우고 처리합니다.
   const processPendingText = useCallback(async () => {
     if (isProcessingRef.current) return;
     
     const textToProcess = pendingText.trim();
     if (!textToProcess) return;
 
-    // 1. AI에게 보내기 직전에 입력창을 먼저 비웁니다.
-    // 이렇게 해야 AI가 연산하는 수 초 동안 들어오는 음성이 지워지지 않고 새롭게 쌓입니다.
+    // 1. AI 처리 시작 전 즉시 비우기 (중요: 이 찰나에 들어오는 음성은 차곡차곡 쌓임)
     setPendingText(''); 
     isProcessingRef.current = true;
     setStatusMessage('AI 보정 및 전송 중...');
@@ -63,16 +60,16 @@ const AdminPage: React.FC = () => {
         return updated;
       });
     } catch (error) {
-      console.error("AI 보정 오류:", error);
-      // 에러가 나더라도 기록 손실을 막기 위해 원문을 그대로 전송합니다.
-      const errorBlock: TextBlock = {
+      console.error("AI Error:", error);
+      // 에러 발생 시 데이터 손실을 막기 위해 원문이라도 강제 전송
+      const fallbackBlock: TextBlock = {
         id: 'err-' + Date.now(),
         original: textToProcess,
         refined: textToProcess,
         timestamp: Date.now(),
       };
       setBlocks(prev => {
-        const updated = [errorBlock, ...prev].slice(0, 500);
+        const updated = [fallbackBlock, ...prev].slice(0, 500);
         syncData(updated);
         return updated;
       });
@@ -82,7 +79,6 @@ const AdminPage: React.FC = () => {
     }
   }, [pendingText, isRecording]);
 
-  // 타이머 로직: 1.5초간 침묵하거나 80자가 넘으면 자동 전송
   useEffect(() => {
     const trimmedText = pendingText.trim();
     if (trimmedText && !isProcessingRef.current) {
@@ -92,8 +88,7 @@ const AdminPage: React.FC = () => {
       }
 
       if (timerRef.current) clearInterval(timerRef.current);
-      
-      let timeLeft = 15; 
+      let timeLeft = 15; // 1.5초 대기
       setCountdown(15);
       
       timerRef.current = setInterval(() => {
@@ -111,4 +106,29 @@ const AdminPage: React.FC = () => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pendingText, processPendingText]);
 
-  const verifyAuth =
+  const verifyAuth = () => {
+    if (authInput === '830411') {
+      setShowAuthModal(false);
+      startRecording();
+    } else {
+      setAuthError(true);
+      setAuthInput('');
+    }
+  };
+
+  const startRecording = () => {
+    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (!SpeechRecognition) return;
+    
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'ko-KR';
+
+    recognition.onstart = () => setIsRecording(true);
+    recognition.onresult = (event: any) => {
+      let finalTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+      }
+      if (finalTranscript) {
