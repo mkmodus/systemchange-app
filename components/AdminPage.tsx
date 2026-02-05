@@ -18,6 +18,7 @@ const AdminPage: React.FC = () => {
   const timerRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
 
+  // 로컬 저장소 초기 로드
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
     if (saved) {
@@ -25,6 +26,7 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
+  // 데이터 동기화 함수
   const syncData = (newBlocks: TextBlock[]) => {
     setBlocks(newBlocks);
     localStorage.setItem(StorageKeys.BLOCKS, JSON.stringify(newBlocks));
@@ -38,7 +40,7 @@ const AdminPage: React.FC = () => {
     const textToProcess = pendingText.trim();
     if (!textToProcess) return;
 
-    // 1. 전송 시작 시 즉시 입력을 비움 (보정 중 들어오는 음성을 새로 받기 위함)
+    // 보정 시작 전 즉시 비움 (보정 도중 들어오는 음성 누락 방지)
     setPendingText(''); 
     isProcessingRef.current = true;
     setStatusMessage('AI 보정 및 전송 중...');
@@ -61,7 +63,7 @@ const AdminPage: React.FC = () => {
       });
     } catch (error) {
       console.error("AI 보정 오류:", error);
-      // 에러 발생 시 기록 손실 방지를 위해 원문이라도 보냄 (선택 사항)
+      // 에러 시 원문이라도 전송하여 기록 유지
       const errorBlock: TextBlock = {
         id: 'err-' + Date.now(),
         original: textToProcess,
@@ -79,11 +81,10 @@ const AdminPage: React.FC = () => {
     }
   }, [pendingText, isRecording]);
 
+  // 타이머 로직
   useEffect(() => {
     const trimmedText = pendingText.trim();
-    
     if (trimmedText && !isProcessingRef.current) {
-      // 글자 수 임계치 도달 시 즉시 전송
       if (trimmedText.length > 80) {
         processPendingText();
         return;
@@ -91,13 +92,12 @@ const AdminPage: React.FC = () => {
 
       if (timerRef.current) clearInterval(timerRef.current);
       
-      let timeLeft = 10; // 약 1초 대기
-      setCountdown(10);
+      let timeLeft = 15; 
+      setCountdown(15);
       
       timerRef.current = setInterval(() => {
         timeLeft -= 1; 
         setCountdown(timeLeft);
-        
         if (timeLeft <= 0) {
           if (timerRef.current) clearInterval(timerRef.current);
           processPendingText();
@@ -107,7 +107,6 @@ const AdminPage: React.FC = () => {
       setCountdown(0);
       if (timerRef.current) clearInterval(timerRef.current);
     }
-
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [pendingText, processPendingText]);
 
@@ -129,4 +128,57 @@ const AdminPage: React.FC = () => {
     }
     try {
       const recognition = new SpeechRecognition();
-      recognition.continuous = true
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'ko-KR';
+
+      recognition.onstart = () => {
+        setIsRecording(true);
+        setStatusMessage('음성 수신 중...');
+      };
+
+      recognition.onresult = (event: any) => {
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          }
+        }
+        if (finalTranscript) {
+          setPendingText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+        }
+      };
+
+      recognition.onerror = () => stopRecording();
+      recognition.onend = () => { if (isRecording) { try { recognition.start(); } catch(e) {} } };
+
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (e) {
+      setStatusMessage("초기화 실패");
+    }
+  };
+
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setIsRecording(false);
+    setStatusMessage('대기 중');
+    if (pendingText.trim()) {
+      processPendingText();
+    }
+  };
+
+  const clearHistory = () => {
+    if (confirm("기록을 삭제하시겠습니까?")) {
+      syncData([]);
+      setPendingText('');
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* 인증 모달 */}
+      {showAuthModal && (
