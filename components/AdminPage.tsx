@@ -157,4 +157,65 @@ const AdminPage: React.FC = () => {
               type="password" value={authInput}
               onChange={(e) => setAuthInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && verifyAuth()}
-              className="w-full bg-black border border-zinc-800 rounded-2xl p-4 text-center text-
+              className="w-full bg-black border border-zinc-800 rounded-2xl p-4 text-center text-2xl outline-none focus:border-blue-500"
+              autoFocus
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Status Bar */}
+      <div className="max-w-6xl mx-auto flex justify-between items-center mb-6 px-2">
+        <div className="flex items-center gap-4">
+          <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-zinc-800'}`} />
+          <span className="text-[10px] font-black tracking-[0.3em] uppercase opacity-50">{statusMessage}</span>
+        </div>
+        <div className="flex items-center gap-6">
+          {!isRecording ? (
+            <button onClick={() => setShowAuthModal(true)} className="text-[10px] font-black tracking-widest hover:text-blue-500">START</button>
+          ) : (
+            <button onClick={stopRecording} className="text-[10px] font-black tracking-widest text-red-500">STOP</button>
+          )}
+          <button onClick={() => { if(confirm("Clear?")) syncToFirebase([]); }} className="text-[10px] font-black tracking-widest opacity-20 hover:opacity-100">CLEAR</button>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-120px)]">
+        {/* Left: Raw Input Stream */}
+        <div className="bg-zinc-900/40 rounded-[2rem] border border-white/5 p-8 flex flex-col relative overflow-hidden">
+          <textarea
+            value={pendingText}
+            onChange={(e) => setPendingText(e.target.value)}
+            className="flex-grow bg-transparent text-4xl md:text-5xl font-black leading-tight resize-none outline-none placeholder-zinc-800"
+            placeholder="..."
+          />
+          {processingSnapshot && (
+            <div className="absolute inset-x-8 bottom-12 p-4 bg-blue-600/10 border border-blue-500/20 rounded-2xl backdrop-blur-md animate-pulse">
+              <p className="text-[9px] text-blue-400 font-black mb-1 uppercase tracking-widest">AI Syncing</p>
+              <p className="text-lg text-white/30 italic font-medium line-clamp-1">{processingSnapshot}</p>
+            </div>
+          )}
+          <div className="h-1 bg-zinc-800/50 w-full mt-6 rounded-full overflow-hidden">
+            <div className="h-full bg-blue-500 transition-all duration-75" style={{ width: `${(countdown / 3) * 100}%` }} />
+          </div>
+        </div>
+
+        {/* Right: AI Refined Results */}
+        <div className="bg-zinc-900/40 rounded-[2rem] border border-white/5 p-8 flex flex-col overflow-hidden shadow-2xl">
+          <div className="flex-grow overflow-y-auto space-y-8 scrollbar-hide">
+            {blocks.map((block, i) => (
+              <div key={block.id} className={`transition-all duration-500 ${i === 0 ? 'opacity-100 translate-y-0' : 'opacity-10 blur-[1px] translate-y-2'}`}>
+                <p className="text-2xl md:text-3xl font-bold leading-tight tracking-tight">
+                  {block.refined}
+                </p>
+                {i === 0 && <div className="mt-2 w-4 h-0.5 bg-blue-500/50 rounded-full" />}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default AdminPage;
