@@ -13,9 +13,9 @@ const AdminPage: React.FC = () => {
   const isProcessingRef = useRef(false);
   const timerRef = useRef<any>(null);
   
-  // 🛡️ 누락 방지 핵심 Refs
-  const accumulatedFinalRef = useRef(''); // 이번 세션 전체 확정 텍스트
-  const lastSentLengthRef = useRef(0); // AI에게 전송 완료된 텍스트의 누적 길이
+  // 🛡️ 누락 방지를 위한 '확정 바구니' 로직
+  const confirmedTextBufferRef = useRef(''); // 아직 AI에게 보내지 않은 확정 텍스트들
+  const lastProcessedIndexRef = useRef(0); // 브라우저 엔진 결과 리스트의 처리 위치
 
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
@@ -36,20 +36,16 @@ const AdminPage: React.FC = () => {
     });
   };
 
-  // ⚡ [누락 방지] 보정 및 전송 함수
-  const processBuffer = useCallback(async (forcedText?: string) => {
-    // 1. 전송할 텍스트 추출 (누락을 막기 위해 현재까지의 전체에서 이미 보낸 길이를 뺀 나머지를 정확히 계산)
-    const currentFull = accumulatedFinalRef.current;
-    const textToSend = (forcedText || currentFull.substring(lastSentLengthRef.current)).trim();
+  // ⚡ [필살기] 보정 및 전송 함수
+  const processBuffer = useCallback(async (manualExtraText?: string) => {
+    // 확정 버퍼에 쌓인 텍스트와 수동 추가 텍스트를 합침
+    const textToSend = (confirmedTextBufferRef.current + (manualExtraText || '')).trim();
     
     if (isProcessingRef.current || textToSend.length < 1) return;
 
+    // 1. 전송 시작 즉시 바구니 비우기 (누락/중복 방지 핵심)
     isProcessingRef.current = true;
-    
-    // 2. 전송 지점 즉시 갱신 (중복 전송 방지)
-    const newSentLength = forcedText ? currentFull.length + manualExtraRef.current : currentFull.length;
-    lastSentLengthRef.current = newSentLength;
-    
+    confirmedTextBufferRef.current = ''; 
     setDisplayInterim(''); 
     setStatusMessage('⚡ AI SYNC');
 
@@ -67,18 +63,17 @@ const AdminPage: React.FC = () => {
         syncData(updated);
         return updated;
       });
+    } catch (e) {
+      console.error("AI Sync Error:", e);
     } finally {
       isProcessingRef.current = false;
       setStatusMessage('LIVE');
     }
   }, [syncData]);
 
-  const manualExtraRef = useRef(0);
-
   // 🕒 자동 전송 (0.8초 침묵 시)
   useEffect(() => {
-    const unsent = accumulatedFinalRef.current.substring(lastSentLengthRef.current).trim();
-    if (unsent && !isProcessingRef.current) {
+    if (confirmedTextBufferRef.current.trim() && !isProcessingRef.current) {
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => processBuffer(), 800);
     }
@@ -101,38 +96,44 @@ const AdminPage: React.FC = () => {
       recognition.onstart = () => {
         setIsRecording(true);
         setStatusMessage('LIVE');
-        accumulatedFinalRef.current = '';
-        lastSentLengthRef.current = 0;
+        confirmedTextBufferRef.current = '';
+        lastProcessedIndexRef.current = 0;
       };
 
       recognition.onresult = (event: any) => {
-        let allFinalized = '';
-        let interim = '';
-
-        // [핵심] 0번 인덱스부터 현재까지 모든 결과를 다시 합산하여 정합성 유지
-        for (let i = 0; i < event.results.length; ++i) {
+        let interimContent = '';
+        
+        // [수정] event.resultIndex부터 시작하여 "새롭게 확정된" 단어들만 바구니(Buffer)에 담음
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
           const transcript = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            allFinalized += (allFinalized ? ' ' : '') + transcript;
+            // 이미 처리한 인덱스가 아니라면 바구니에 추가
+            if (i >= lastProcessedIndexRef.current) {
+              confirmedTextBufferRef.current += (confirmedTextBufferRef.current ? ' ' : '') + transcript;
+              lastProcessedIndexRef.current = i + 1;
+            }
           } else {
-            interim += transcript;
+            interimContent += transcript;
           }
         }
 
-        accumulatedFinalRef.current = allFinalized;
-        
-        // 화면 표시: 이미 보낸 길이를 정확히 제외하고 출력
-        const currentUnsent = allFinalized.substring(lastSentLengthRef.current) + interim;
-        setDisplayInterim(currentUnsent.trim());
+        // 화면 표시: 바구니에 든 확정 텍스트 + 현재 들리고 있는 임시 텍스트
+        setDisplayInterim(confirmedTextBufferRef.current + interimContent);
 
-        // 40자 도달 시 자동 전송
-        if (allFinalized.substring(lastSentLengthRef.current).length > 40) {
+        // 바구니가 40자를 넘으면 자동 전송 시도
+        if (confirmedTextBufferRef.current.length > 40) {
           processBuffer();
         }
       };
 
       recognition.onerror = () => setIsRecording(false);
-      recognition.onend = () => { if (isRecording) try { recognition.start(); } catch(e) {} };
+      recognition.onend = () => { 
+        if (isRecording) {
+          // 엔진이 종료될 때 바구니에 남은 게 있다면 털어내기
+          if (confirmedTextBufferRef.current.trim()) processBuffer();
+          try { recognition.start(); } catch(e) {}
+        } 
+      };
 
       recognition.start();
       recognitionRef.current = recognition;
@@ -152,7 +153,9 @@ const AdminPage: React.FC = () => {
 
   const handleManualSend = () => {
     if (displayInterim.trim()) {
-      processBuffer(displayInterim.trim());
+      // 현재 화면에 보이는 모든 내용(Interim 포함)을 강제로 보냄
+      const extra = displayInterim.replace(confirmedTextBufferRef.current, '');
+      processBuffer(extra);
     }
   };
 
@@ -164,7 +167,7 @@ const AdminPage: React.FC = () => {
             <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 shadow-[0_0_8px_red]' : 'bg-zinc-800'}`} />
             <span className="text-[10px] font-bold tracking-widest uppercase">{statusMessage}</span>
           </div>
-          <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-tighter">COMPACT WORKSTATION</span>
+          <span className="text-[9px] font-bold text-zinc-600 uppercase">STATION v2.1</span>
         </div>
         <div className="flex gap-4">
           <button onClick={isRecording ? stopRecording : startRecording} className={`text-[10px] font-black px-4 py-1.5 rounded transition-all ${isRecording ? 'bg-red-600/20 text-red-500 border border-red-500/30' : 'bg-blue-600 text-white'}`}>{isRecording ? 'STOP' : 'START'}</button>
@@ -175,9 +178,9 @@ const AdminPage: React.FC = () => {
       <main className="max-w-full w-full grid grid-cols-12 gap-6 px-4">
         <section className="col-span-4 flex flex-col h-[calc(100vh-100px)]">
           <div className="flex justify-between items-center mb-2 px-1">
-            <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest italic">Live Feed</span>
+            <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Live Feed</span>
             {displayInterim.trim() && (
-              <button onClick={handleManualSend} className="text-[8px] font-black text-blue-400 border border-blue-400/30 px-2 py-0.5 rounded hover:bg-blue-400 hover:text-white">FLUSH</button>
+              <button onClick={handleManualSend} className="text-[8px] font-black text-blue-400 border border-blue-400/30 px-2 py-0.5 rounded hover:bg-blue-400">FLUSH</button>
             )}
           </div>
           <div className="flex-grow bg-zinc-900/30 rounded-xl p-4 border border-white/5 overflow-y-auto">
@@ -188,7 +191,7 @@ const AdminPage: React.FC = () => {
         </section>
 
         <section className="col-span-8 flex flex-col h-[calc(100vh-100px)] border-l border-white/5 pl-6">
-          <span className="text-[9px] text-blue-500 font-bold mb-2 px-1 uppercase tracking-widest italic">Refined Presentation (Click to edit)</span>
+          <span className="text-[9px] text-blue-500 font-bold mb-2 px-1 uppercase tracking-widest">Refined (Click to edit)</span>
           <div className="flex-grow overflow-y-auto space-y-1 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
               <div key={block.id} className={`group flex gap-3 p-1 rounded transition-all ${i === 0 ? 'bg-white/5' : 'opacity-50 hover:opacity-100'}`}>
