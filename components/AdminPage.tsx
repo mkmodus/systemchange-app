@@ -12,8 +12,10 @@ const AdminPage: React.FC = () => {
   const recognitionRef = useRef<any>(null);
   const isProcessingRef = useRef(false);
   const timerRef = useRef<any>(null);
-  const fullContentRef = useRef(''); 
-  const offsetRef = useRef(0); 
+  
+  // 🛡️ 누락 방지 핵심 Refs
+  const accumulatedFinalRef = useRef(''); // 이번 세션 전체 확정 텍스트
+  const lastSentLengthRef = useRef(0); // AI에게 전송 완료된 텍스트의 누적 길이
 
   useEffect(() => {
     const saved = localStorage.getItem(StorageKeys.BLOCKS);
@@ -34,12 +36,20 @@ const AdminPage: React.FC = () => {
     });
   };
 
-  const processBuffer = useCallback(async (manualText?: string) => {
-    const textToSend = (manualText || fullContentRef.current.substring(offsetRef.current)).trim();
+  // ⚡ [누락 방지] 보정 및 전송 함수
+  const processBuffer = useCallback(async (forcedText?: string) => {
+    // 1. 전송할 텍스트 추출 (누락을 막기 위해 현재까지의 전체에서 이미 보낸 길이를 뺀 나머지를 정확히 계산)
+    const currentFull = accumulatedFinalRef.current;
+    const textToSend = (forcedText || currentFull.substring(lastSentLengthRef.current)).trim();
+    
     if (isProcessingRef.current || textToSend.length < 1) return;
 
     isProcessingRef.current = true;
-    offsetRef.current = fullContentRef.current.length;
+    
+    // 2. 전송 지점 즉시 갱신 (중복 전송 방지)
+    const newSentLength = forcedText ? currentFull.length + manualExtraRef.current : currentFull.length;
+    lastSentLengthRef.current = newSentLength;
+    
     setDisplayInterim(''); 
     setStatusMessage('⚡ AI SYNC');
 
@@ -63,8 +73,11 @@ const AdminPage: React.FC = () => {
     }
   }, [syncData]);
 
+  const manualExtraRef = useRef(0);
+
+  // 🕒 자동 전송 (0.8초 침묵 시)
   useEffect(() => {
-    const unsent = fullContentRef.current.substring(offsetRef.current).trim();
+    const unsent = accumulatedFinalRef.current.substring(lastSentLengthRef.current).trim();
     if (unsent && !isProcessingRef.current) {
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => processBuffer(), 800);
@@ -72,29 +85,13 @@ const AdminPage: React.FC = () => {
     return () => clearTimeout(timerRef.current);
   }, [displayInterim, processBuffer]);
 
-  const handleManualSend = () => {
-    if (displayInterim.trim()) {
-      const textToForce = displayInterim.trim();
-      fullContentRef.current = fullContentRef.current.substring(0, offsetRef.current) + textToForce;
-      processBuffer(textToForce);
-      setDisplayInterim('');
-      offsetRef.current = fullContentRef.current.length;
-    }
-  };
-
   const startRecording = async () => {
     try {
-      setStatusMessage('MIC...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach(track => track.stop());
 
       const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
       if (!SpeechRecognition) return;
-
-      if (recognitionRef.current) {
-        recognitionRef.current.onend = null;
-        try { recognitionRef.current.stop(); } catch(e) {}
-      }
 
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
@@ -104,125 +101,110 @@ const AdminPage: React.FC = () => {
       recognition.onstart = () => {
         setIsRecording(true);
         setStatusMessage('LIVE');
-        fullContentRef.current = '';
-        offsetRef.current = 0;
+        accumulatedFinalRef.current = '';
+        lastSentLengthRef.current = 0;
       };
 
       recognition.onresult = (event: any) => {
+        let allFinalized = '';
         let interim = '';
-        let finalized = '';
+
+        // [핵심] 0번 인덱스부터 현재까지 모든 결과를 다시 합산하여 정합성 유지
         for (let i = 0; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) finalized += event.results[i][0].transcript;
-          else if (i >= event.resultIndex) interim += event.results[i][0].transcript;
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            allFinalized += (allFinalized ? ' ' : '') + transcript;
+          } else {
+            interim += transcript;
+          }
         }
-        fullContentRef.current = finalized;
-        setDisplayInterim(finalized.substring(offsetRef.current) + interim);
-        if (finalized.substring(offsetRef.current).length > 40) processBuffer();
+
+        accumulatedFinalRef.current = allFinalized;
+        
+        // 화면 표시: 이미 보낸 길이를 정확히 제외하고 출력
+        const currentUnsent = allFinalized.substring(lastSentLengthRef.current) + interim;
+        setDisplayInterim(currentUnsent.trim());
+
+        // 40자 도달 시 자동 전송
+        if (allFinalized.substring(lastSentLengthRef.current).length > 40) {
+          processBuffer();
+        }
       };
 
-      recognition.onend = () => { if (isRecording) recognition.start(); };
+      recognition.onerror = () => setIsRecording(false);
+      recognition.onend = () => { if (isRecording) try { recognition.start(); } catch(e) {} };
+
       recognition.start();
       recognitionRef.current = recognition;
     } catch (err) {
-      setStatusMessage('MIC BLOCKED');
+      setStatusMessage('MIC ERROR');
       setIsRecording(false);
     }
   };
 
   const stopRecording = () => {
     setIsRecording(false);
-    setStatusMessage('READY');
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       recognitionRef.current.stop();
     }
   };
 
+  const handleManualSend = () => {
+    if (displayInterim.trim()) {
+      processBuffer(displayInterim.trim());
+    }
+  };
+
   return (
     <div className="p-3 bg-zinc-950 min-h-screen text-zinc-100 font-sans flex flex-col antialiased">
-      {/* 🛠️ Compact Header */}
-      <header className="max-w-full mx-auto w-full flex justify-between items-center mb-4 py-2 px-4 border-b border-white/5 sticky top-0 bg-zinc-950/80 backdrop-blur-sm z-50">
+      <header className="max-w-full w-full flex justify-between items-center mb-4 py-2 px-4 border-b border-white/5 sticky top-0 bg-zinc-950 z-50">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 shadow-[0_0_8px_red]' : 'bg-zinc-800'}`} />
             <span className="text-[10px] font-bold tracking-widest uppercase">{statusMessage}</span>
           </div>
-          <div className="h-3 w-[1px] bg-white/10" />
-          <span className="text-[9px] font-bold text-zinc-600 tracking-tighter uppercase">STATION v2.0 • COMPACT MODE</span>
+          <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-tighter">COMPACT WORKSTATION</span>
         </div>
-        
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={isRecording ? stopRecording : startRecording} 
-            className={`text-[10px] font-black px-4 py-1.5 rounded transition-all ${isRecording ? 'bg-red-600/20 text-red-500 border border-red-500/30' : 'bg-blue-600 text-white'}`}
-          >
-            {isRecording ? 'STOP SESSION' : 'START SESSION'}
-          </button>
-          <button onClick={() => confirm("Reset?") && syncData([])} className="text-[9px] font-bold text-zinc-600 hover:text-white transition-colors">RESET</button>
+        <div className="flex gap-4">
+          <button onClick={isRecording ? stopRecording : startRecording} className={`text-[10px] font-black px-4 py-1.5 rounded transition-all ${isRecording ? 'bg-red-600/20 text-red-500 border border-red-500/30' : 'bg-blue-600 text-white'}`}>{isRecording ? 'STOP' : 'START'}</button>
+          <button onClick={() => confirm("Reset?") && syncData([])} className="text-[9px] font-bold text-zinc-600">RESET</button>
         </div>
       </header>
 
-      {/* 🚀 Wide Workspace */}
-      <main className="max-w-full w-full grid grid-cols-12 gap-6 flex-grow overflow-hidden px-4">
-        
-        {/* Left: Monitoring Stream (Reduced Size) */}
-        <section className="col-span-12 lg:col-span-4 flex flex-col h-[calc(100vh-80px)]">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[9px] text-zinc-500 font-bold tracking-widest uppercase">01. Raw Input</span>
+      <main className="max-w-full w-full grid grid-cols-12 gap-6 px-4">
+        <section className="col-span-4 flex flex-col h-[calc(100vh-100px)]">
+          <div className="flex justify-between items-center mb-2 px-1">
+            <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest italic">Live Feed</span>
             {displayInterim.trim() && (
-              <button onClick={handleManualSend} className="text-[8px] font-black text-blue-400 border border-blue-400/30 px-2 py-0.5 rounded hover:bg-blue-400 hover:text-white transition-all">FLUSH</button>
+              <button onClick={handleManualSend} className="text-[8px] font-black text-blue-400 border border-blue-400/30 px-2 py-0.5 rounded hover:bg-blue-400 hover:text-white">FLUSH</button>
             )}
           </div>
-          <div className="flex-grow bg-zinc-900/40 rounded-xl p-4 border border-white/5 overflow-y-auto">
-            <div className="text-lg md:text-xl font-medium leading-relaxed text-white/20 break-keep">
-              {displayInterim || <span className="text-zinc-900 italic text-sm">Waiting for signal...</span>}
+          <div className="flex-grow bg-zinc-900/30 rounded-xl p-4 border border-white/5 overflow-y-auto">
+            <div className="text-lg font-medium leading-relaxed text-white/20 break-keep">
+              {displayInterim || <span className="text-zinc-900">...</span>}
             </div>
           </div>
         </section>
 
-        {/* Right: Editable Presentation (Reduced Size & High Density) */}
-        <section className="col-span-12 lg:col-span-8 flex flex-col h-[calc(100vh-80px)] border-l border-white/5 pl-6">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[9px] text-blue-500 font-bold tracking-widest uppercase">02. Refined Stream (Editable List)</span>
-            <span className="text-[8px] text-zinc-600 font-medium italic uppercase">Real-time sync to all participants</span>
-          </div>
-          
+        <section className="col-span-8 flex flex-col h-[calc(100vh-100px)] border-l border-white/5 pl-6">
+          <span className="text-[9px] text-blue-500 font-bold mb-2 px-1 uppercase tracking-widest italic">Refined Presentation (Click to edit)</span>
           <div className="flex-grow overflow-y-auto space-y-1 scrollbar-hide pb-20">
             {blocks.map((block, i) => (
-              <div key={block.id} className={`group flex gap-3 p-1 rounded-md transition-all ${i === 0 ? 'bg-white/5' : 'opacity-60 hover:opacity-100 hover:bg-white/[0.02]'}`}>
-                <div className="flex flex-col items-center pt-2">
-                  <div className={`w-1 h-1 rounded-full ${i === 0 ? 'bg-blue-500' : 'bg-zinc-800 group-hover:bg-zinc-600'}`} />
-                </div>
+              <div key={block.id} className={`group flex gap-3 p-1 rounded transition-all ${i === 0 ? 'bg-white/5' : 'opacity-50 hover:opacity-100'}`}>
+                <div className="pt-2"><div className={`w-1 h-1 rounded-full ${i === 0 ? 'bg-blue-500' : 'bg-zinc-800'}`} /></div>
                 <textarea
                   value={block.refined}
                   onChange={(e) => handleEditBlock(block.id, e.target.value)}
-                  className="flex-grow bg-transparent text-sm md:text-base font-medium leading-snug text-white/90 border-none outline-none focus:text-blue-400 py-1 transition-all resize-none overflow-hidden"
-                  rows={Math.max(1, Math.ceil(block.refined.length / 50))}
+                  className="flex-grow bg-transparent text-sm md:text-base font-medium leading-snug text-white/90 outline-none focus:text-blue-400 py-1 transition-all resize-none overflow-hidden"
+                  rows={Math.max(1, Math.ceil(block.refined.length / 60))}
                   spellCheck={false}
                 />
-                <button 
-                  onClick={() => handleEditBlock(block.id, block.original)} 
-                  className="opacity-0 group-hover:opacity-100 text-[8px] text-zinc-700 hover:text-zinc-400 px-2 transition-all uppercase font-bold"
-                  title="Undo to Original"
-                >
-                  Undo
-                </button>
               </div>
             ))}
           </div>
         </section>
       </main>
-
-      {/* 🔘 Compact Footer */}
-      <footer className="w-full py-1 px-4 flex justify-between border-t border-white/5 mt-2">
-        <div className="flex gap-4 text-[8px] font-mono text-zinc-700 uppercase tracking-[0.2em]">
-          <span>Sync: Firebase Cloud</span>
-          <span>Buffer: {blocks.length}</span>
-        </div>
-        <div className="text-[8px] font-mono text-zinc-700 italic">
-          Press 'Enter' on focused block is not mapped yet (Use mouse).
-        </div>
-      </footer>
     </div>
   );
 };
